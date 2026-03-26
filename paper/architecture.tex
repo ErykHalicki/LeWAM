@@ -1,0 +1,90 @@
+
+\definecolor{cblue}{HTML}{4A90D9}
+\definecolor{cgreen}{HTML}{5BAD72}
+\definecolor{corange}{HTML}{E8863A}
+\definecolor{cpurple}{HTML}{9B6BBE}
+\definecolor{cgray}{HTML}{7F8C8D}
+
+\begin{tikzpicture}[
+    box/.style 2 args={
+        draw=#1!70!black, fill=#1!12, rounded corners=5pt,
+        minimum width=2.1cm, minimum height=0.85cm,
+        align=center, font=\small\bfseries, text=#1!70!black,
+        line width=0.8pt
+    },
+    latent/.style={
+        draw=#1!70!black, fill=#1!18, circle,
+        minimum size=0.78cm, font=\small, inner sep=1pt,
+        text=#1!70!black, line width=0.8pt
+    },
+    arr/.style={-{Stealth[length=5pt, width=4pt]}, thick, color=#1},
+]
+
+%% ---- Encoder column (left) ----
+\node[box={cblue}{}]                          (enc)  {Video\\Encoder};
+\node[box={cgreen}{},  below=1.4cm of enc]    (lenc) {Language\\Encoder};
+\node[box={cpurple}{}, below=1.4cm of lenc]   (senc) {State\\Encoder};
+
+%% ---- Inputs to encoders ----
+\node[latent=cgray, left=1.2cm of enc]   (frames) {$I_{\leq t}$};
+\node[latent=cgray, left=1.2cm of lenc]  (d)      {$d$};
+\node[latent=cgray, left=1.2cm of senc]  (st)     {$s_t$};
+
+\draw[arr=cgray] (frames) -- (enc);
+\draw[arr=cgray] (d)      -- (lenc);
+\draw[arr=cgray] (st)     -- (senc);
+
+%% ---- Encoder outputs ----
+\node[latent=cblue,   right=1.2cm of enc]   (zt)   {$z_{\leq t}$};
+\node[latent=cgreen,  right=1.2cm of lenc]  (dz)   {$d_z$};
+\node[latent=cpurple, right=1.2cm of senc]  (szt)  {$sz_t$};
+
+\draw[arr=cblue]   (enc)  -- (zt);
+\draw[arr=cgreen]  (lenc) -- (dz);
+\draw[arr=cpurple] (senc) -- (szt);
+
+%% ---- Latent Predictor ----
+\node[box={cblue}{}, right=2.0cm of zt]  (pred) {Latent\\Predictor};
+
+\draw[arr=cblue]  (zt)  -- (pred.west);
+\draw[arr=cgreen] (dz)  -| (pred.south);
+
+%% ---- Predictor output ----
+\node[latent=cblue, right=1.1cm of pred] (zhat) {$\hat{z}_{t+1}$};
+\draw[arr=cblue] (pred) -- (zhat);
+
+%% ---- IDM ----
+\node[box={corange}{}, right=2.0cm of zhat] (idm) {IDM};
+
+\draw[arr=cblue]   (zhat) -- (idm.west);
+\draw[arr=cpurple] (szt)  -| (idm.south);
+
+%% Skip: z_t -> IDM over the top
+\draw[-{Stealth[length=5pt]}, thick, color=cblue, dashed]
+    (zt.north) -- ++(0, 1.0)
+    -- ($(idm.north) + (0, 1.0)$)
+    -- (idm.north);
+
+%% ---- Action Decoder ----
+\node[latent=corange,  right=1.2cm of idm]  (azt)  {$az_t$};
+\node[box={corange}{}, right=1.2cm of azt]  (adec) {Action\\Decoder};
+\node[latent=cgray,    right=1.2cm of adec] (at)   {$a_t$};
+
+\draw[arr=corange] (idm)  -- (azt);
+\draw[arr=corange] (azt)  -- (adec);
+\draw[arr=cgray]   (adec) -- (at);
+
+%% ---- Invisible anchor at the bottom of the diagram ----
+%% szt is the lowest node; we drop 2cm below it for the legend
+\coordinate (bottomleft) at ($(frames.west |- szt.south) + (0, -2.0cm)$);
+
+\node[draw=black, line width=0.7pt, rounded corners=4pt, inner sep=7pt,
+      anchor=north west] at (bottomleft) {%
+    \begin{tabular}{@{}ll@{\hspace{1.2cm}}ll@{}}
+        $I$    & image (raw frame)   & $\hat{z}$ & predicted latent \\[4pt]
+        $z$    & latent embedding    & $s$       & proprioceptive state \\[4pt]
+        $a$    & action              & $d$       & language directive \\
+    \end{tabular}
+};
+
+\end{tikzpicture}

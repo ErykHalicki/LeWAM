@@ -1,0 +1,35 @@
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage[backend=biber,style=alphabetic]{biblatex}
+\usetikzlibrary{arrows.meta, positioning, calc}
+\definecolor{cblue}{HTML}{4A90D9}
+\definecolor{cgreen}{HTML}{5BAD72}
+\definecolor{corange}{HTML}{E8863A}
+\definecolor{cpurple}{HTML}{9B6BBE}
+\definecolor{cgray}{HTML}{7F8C8D}
+\addbibresource{ref.bib}
+
+% Preamble end
+
+\title{LeWorldActionModel}
+\author{Eryk Halicki}
+\date{March 2026}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+\section{Model Architecture}
+\begin{figure}[h]
+    \centering
+    \resizebox{\textwidth}{!}{\input{architecture.tex}}
+    \caption{Model architecture.}
+\end{figure}
+\cite{vjepa2_1}
+
+\printbibliography
+
+\end{document}
