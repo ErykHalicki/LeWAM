@@ -20,7 +20,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv pip install --system -e . pytest torch --index-url https://download.pytorch.org/whl/cpu
+        run: uv pip install --system -e . pytest torch --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Run tests
         run: python -m pytest tests/ -v
