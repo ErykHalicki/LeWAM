@@ -14,17 +14,7 @@
 #   l_mask      (B, S)               key padding mask for language (True = ignore)
 #   → returns   (B, K*H*W, in_dim)   predicted velocity field (x1 - x0)
 #
-# Positional encoding:
-#   - Past frames + noisy future x: 3D RoPE over (T, H, W), applied post-projection
-#   - Language tokens: no positional encoding (encoder already encodes order)
-#   - State token: no positional encoding (single vector, no sequence structure)
-#
-# Each DiTBlock: SA (3D RoPE) → CA → MLP
-#   SA:  self-attention on noisy future patches with 3D RoPE
-#   CA:  cross-attention to [past_frames (3D RoPE), language (no RoPE), state (no RoPE)]
-#        each source has independent K/V projections inside CrossAttention
-#   MLP: standard feedforward; adaLN-Zero conditioning from timestep on SA and MLP
-#
+# Each Block: SA (3D RoPE, adaLN-Zero) → CA (past_frames+RoPE, language, state) → MLP (adaLN-Zero)
 # Flow matching loss (not in this file): MSE(v_pred, x1 - x0)
 #   where x_t = (1 - t) * x0 + t * x1, x0 ~ N(0, I)
 # --------------------------------------------------------
@@ -34,7 +24,7 @@ import math
 import torch
 import torch.nn as nn
 
-from wam.models.common import RoPE3D, SelfAttention, CrossAttention, make_mlp, modulate
+from wam.models.common import Block, modulate
 
 
 class TimestepEmbedder(nn.Module):
@@ -61,56 +51,6 @@ class TimestepEmbedder(nn.Module):
 
     def forward(self, t):
         return self.mlp(self.timestep_embedding(t, self.frequency_embedding_size))
-
-
-class DiTBlock(nn.Module):
-    """DiT block: SA (3D RoPE) -> CA (past_frames with RoPE, language, state) -> MLP."""
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
-        super().__init__()
-        self.rope = RoPE3D(hidden_size // num_heads)
-
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.sa = SelfAttention(hidden_size, num_heads)
-
-        self.norm_ca = nn.LayerNorm(hidden_size, eps=1e-6)
-        self.ca = CrossAttention(hidden_size, num_heads, num_sources=3)  # past_frames, language, state
-
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.mlp = make_mlp(hidden_size, int(hidden_size * mlp_ratio), hidden_size)
-
-        self.adaLN_modulation = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size, bias=True),
-            nn.SiLU(),
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True),
-        )
-
-    def forward(self, x, t, past_frames, l, state_token, x_pos, pf_pos, l_mask=None):
-        """
-        x:           (B, N, hidden_size)
-        t:           (B, hidden_size)       timestep conditioning
-        past_frames: (B, M, hidden_size)
-        l:           (B, S, hidden_size)
-        state_token: (B, 1, hidden_size)
-        x_pos:       (t_ids, h_ids, w_ids) each (N,)
-        pf_pos:      (t_ids, h_ids, w_ids) each (M,)
-        l_mask:      (B, S) True = ignore
-        """
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(t).chunk(6, dim=1)
-
-        x = x + gate_msa.unsqueeze(1) * self.sa(
-            modulate(self.norm1(x), shift_msa, scale_msa),
-            rope=self.rope, pos=x_pos,
-        )
-        x = x + self.ca(
-            self.norm_ca(x),
-            sources=[past_frames, l, state_token],
-            rope=self.rope,
-            q_pos=x_pos,
-            source_positions=[pf_pos, None, None],
-            source_masks=[None, l_mask, None],
-        )
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        return x
 
 
 class FinalLayer(nn.Module):
@@ -165,14 +105,15 @@ class DiT(nn.Module):
         self.language_dropout_prob = language_dropout_prob
         self.state_dropout_prob = state_dropout_prob
 
-        self.x_embedder    = nn.Linear(in_dim, hidden_size)
-        self.t_embedder    = TimestepEmbedder(hidden_size)
-        self.context_proj  = nn.Linear(in_dim, hidden_size)
-        self.lang_proj     = nn.Linear(lang_dim, hidden_size)
-        self.state_proj    = nn.Linear(state_dim, hidden_size)
+        self.x_embedder   = nn.Linear(in_dim, hidden_size)
+        self.t_embedder   = TimestepEmbedder(hidden_size)
+        self.context_proj = nn.Linear(in_dim, hidden_size)
+        self.lang_proj    = nn.Linear(lang_dim, hidden_size)
+        self.state_proj   = nn.Linear(state_dim, hidden_size)
 
         self.blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            Block(hidden_size, num_heads, num_sources=3, mlp_ratio=mlp_ratio, use_adaln=True)
+            for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, in_dim)
 
@@ -200,22 +141,22 @@ class DiT(nn.Module):
     def initialize_weights(self):
         def _basic_init(module):
             if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight)
+                nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
+                    nn.init.zeros_(module.bias)
         self.apply(_basic_init)
 
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
         for block in self.blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+            nn.init.zeros_(block.adaLN_modulation[-1].weight)
+            nn.init.zeros_(block.adaLN_modulation[-1].bias)
 
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_layer.linear.weight, 0)
-        nn.init.constant_(self.final_layer.linear.bias, 0)
+        nn.init.zeros_(self.final_layer.adaLN_modulation[-1].weight)
+        nn.init.zeros_(self.final_layer.adaLN_modulation[-1].bias)
+        nn.init.zeros_(self.final_layer.linear.weight)
+        nn.init.zeros_(self.final_layer.linear.bias)
 
     def forward(self, x, t, past_frames, l, state, l_mask=None):
         """
@@ -233,19 +174,26 @@ class DiT(nn.Module):
             drop = torch.rand(state.shape[0], device=state.device) < self.state_dropout_prob
             state = state.masked_fill(drop.unsqueeze(1), 0.0)
 
-        x           = self.x_embedder(x)                        # (B, K*H*W, hidden_size)
-        past_frames = self.context_proj(past_frames)             # (B, T*H*W, hidden_size)
-        l           = self.lang_proj(l)                          # (B, S, hidden_size)
-        state_token = self.state_proj(state).unsqueeze(1)        # (B, 1, hidden_size)
-        t_emb       = self.t_embedder(t)                         # (B, hidden_size)
+        x           = self.x_embedder(x)
+        past_frames = self.context_proj(past_frames)
+        l           = self.lang_proj(l)
+        state_token = self.state_proj(state).unsqueeze(1)
+        t_emb       = self.t_embedder(t)
 
         x_pos  = (self.future_t_ids, self.future_h_ids, self.future_w_ids)
         pf_pos = (self.past_t_ids,   self.past_h_ids,   self.past_w_ids)
 
         for block in self.blocks:
-            x = block(x, t_emb, past_frames, l, state_token, x_pos, pf_pos, l_mask)
+            x = block(
+                x,
+                sources=[past_frames, l, state_token],
+                source_positions=[pf_pos, None, None],
+                source_masks=[None, l_mask, None],
+                cond=t_emb,
+                q_pos=x_pos,
+            )
 
-        return self.final_layer(x, t_emb)                        # (B, K*H*W, in_dim)
+        return self.final_layer(x, t_emb)
 
 
 def DiT_XL(**kwargs):
@@ -259,7 +207,6 @@ def DiT_B(**kwargs):
 
 def DiT_S(**kwargs):
     return DiT(depth=12, hidden_size=384, num_heads=6, **kwargs)
-
 
 def DiT_Baby(**kwargs):
     return DiT(depth=2, hidden_size=64, num_heads=4, **kwargs)

@@ -1,3 +1,5 @@
+import warnings
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -132,3 +134,84 @@ class CrossAttention(nn.Module):
 
         out = F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask)
         return self.out_proj(out.transpose(1, 2).reshape(B, N, -1))
+
+
+class Block(nn.Module):
+    """
+    Unified transformer block used by both DiT (flow matching) and IDM (regression).
+
+    SA (optional 3D RoPE, optional adaLN-Zero) → CA (variable sources) → MLP (optional adaLN-Zero)
+
+    use_adaln=True:  adaLN-Zero conditioning via `cond` (B, hidden_size) — for DiT.
+    use_adaln=False: standard LayerNorm, no gating — for IDM.
+
+    sa_first=True:  SA → CA → MLP (DiT: queries have content from the start).
+    sa_first=False: CA → SA → MLP (IDM: queries are learned tokens with no initial content,
+                    so CA must run first to give them something meaningful to self-attend over).
+
+    q_pos passed to forward controls whether queries get 3D RoPE in SA and CA.
+    source_positions controls 3D RoPE on each source's K/V in CA.
+    """
+    def __init__(self, hidden_size, num_heads, num_sources, mlp_ratio=4.0, use_adaln=True, sa_first=True):
+        super().__init__()
+        self.use_adaln = use_adaln
+        self.rope = RoPE3D(hidden_size // num_heads)
+
+        affine = not use_adaln
+        self.norm1  = nn.LayerNorm(hidden_size, elementwise_affine=affine, eps=1e-6)
+        self.sa     = SelfAttention(hidden_size, num_heads)
+
+        self.norm_ca = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.ca      = CrossAttention(hidden_size, num_heads, num_sources)
+
+        self.norm2    = nn.LayerNorm(hidden_size, elementwise_affine=affine, eps=1e-6)
+        self.mlp      = make_mlp(hidden_size, int(hidden_size * mlp_ratio), hidden_size)
+        self.sa_first = sa_first
+
+        if use_adaln:
+            self.adaLN_modulation = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size, bias=True),
+                nn.SiLU(),
+                nn.Linear(hidden_size, 6 * hidden_size, bias=True),
+            )
+
+    def _run_sa(self, x, shift=None, scale=None, gate=None, q_pos=None):
+        h = modulate(self.norm1(x), shift, scale) if self.use_adaln else self.norm1(x)
+        out = self.sa(h, rope=self.rope if q_pos is not None else None, pos=q_pos)
+        return x + (gate.unsqueeze(1) * out if self.use_adaln else out)
+
+    def _run_ca(self, x, sources, source_positions, source_masks, q_pos):
+        return x + self.ca(self.norm_ca(x), sources, rope=self.rope, q_pos=q_pos,
+                           source_positions=source_positions, source_masks=source_masks)
+
+    def _run_mlp(self, x, shift=None, scale=None, gate=None):
+        h = modulate(self.norm2(x), shift, scale) if self.use_adaln else self.norm2(x)
+        return x + (gate.unsqueeze(1) * self.mlp(h) if self.use_adaln else self.mlp(h))
+
+    def forward(self, x, sources, source_positions=None, source_masks=None, cond=None, q_pos=None):
+        """
+        x:                (B, N, hidden_size)
+        sources:          list of (B, N_i, hidden_size)
+        source_positions: list of (t_ids, h_ids, w_ids) or None per source
+        source_masks:     list of (B, N_i) bool (True=ignore) or None per source
+        cond:             (B, hidden_size) adaLN conditioning — required when use_adaln=True
+        q_pos:            (t_ids, h_ids, w_ids) for 3D RoPE on queries, or None
+        """
+        if not self.use_adaln and cond is not None:
+            warnings.warn("cond passed to a Block with use_adaln=False — it will be ignored", stacklevel=2)
+
+        shift_msa = scale_msa = gate_msa = shift_mlp = scale_mlp = gate_mlp = None
+        if self.use_adaln:
+            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(cond).chunk(6, dim=1)
+
+        if self.sa_first:
+            x = self._run_sa(x, shift_msa, scale_msa, gate_msa, q_pos)
+            x = self._run_ca(x, sources, source_positions, source_masks, q_pos)
+        else:
+            # CA before SA: used when queries have no input-dependent content (e.g. learned
+            # action query tokens in the IDM). Running SA first would be a no-op in block 0
+            # since all queries are near-identical — CA must populate them first.
+            x = self._run_ca(x, sources, source_positions, source_masks, q_pos)
+            x = self._run_sa(x, shift_msa, scale_msa, gate_msa, q_pos)
+
+        return self._run_mlp(x, shift_mlp, scale_mlp, gate_mlp)

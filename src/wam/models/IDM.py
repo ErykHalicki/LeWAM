@@ -7,57 +7,14 @@
 #   state          (B, state_dim)       proprioceptive state vector
 #   → returns      (B, chunk_len, action_dim)   predicted action chunk
 #
-# Architecture: Transformer with learned action query tokens.
-#   Each IDMBlock: SA (bidirectional, no RoPE) → CA → MLP
-#   CA cross-attends to: current_frames (3D RoPE), future_frames (3D RoPE), state (no RoPE)
-#
-# Positional encoding:
-#   - current/future patches: 3D RoPE over (T, H, W) applied in cross-attention K/V
-#   - action queries: learned 1D position embeddings (temporal order within chunk)
-#   - state token: no positional encoding
+# Each Block: SA (bidirectional, no RoPE, no adaLN) → CA (current+RoPE, future+RoPE, state) → MLP
+# Loss (not in this file): MSE(a_pred, a_gt)
 # --------------------------------------------------------
 
 import torch
 import torch.nn as nn
 
-from wam.models.common import RoPE3D, SelfAttention, CrossAttention, make_mlp
-
-
-class IDMBlock(nn.Module):
-    """IDM block: SA (bidirectional) → CA (current, future, state) → MLP."""
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
-        super().__init__()
-        self.rope = RoPE3D(hidden_size // num_heads)
-
-        self.norm1  = nn.LayerNorm(hidden_size, eps=1e-6)
-        self.sa     = SelfAttention(hidden_size, num_heads)
-
-        self.norm_ca = nn.LayerNorm(hidden_size, eps=1e-6)
-        self.ca      = CrossAttention(hidden_size, num_heads, num_sources=3)
-
-        self.norm2 = nn.LayerNorm(hidden_size, eps=1e-6)
-        self.mlp   = make_mlp(hidden_size, int(hidden_size * mlp_ratio), hidden_size)
-
-    def forward(self, q, current, future, state_token, cur_pos, fut_pos):
-        """
-        q:           (B, chunk_len, hidden_size)
-        current:     (B, T*H*W, hidden_size)
-        future:      (B, K*H*W, hidden_size)
-        state_token: (B, 1, hidden_size)
-        cur_pos:     (t_ids, h_ids, w_ids) for current frames
-        fut_pos:     (t_ids, h_ids, w_ids) for future frames
-        """
-        q = q + self.sa(self.norm1(q))
-        q = q + self.ca(
-            self.norm_ca(q),
-            sources=[current, future, state_token],
-            rope=self.rope,
-            q_pos=None,
-            source_positions=[cur_pos, fut_pos, None],
-            source_masks=None,
-        )
-        q = q + self.mlp(self.norm2(q))
-        return q
+from wam.models.common import Block
 
 
 class IDM(nn.Module):
@@ -83,18 +40,18 @@ class IDM(nn.Module):
         mlp_ratio=4.0,
         state_dim=64,
         action_dim=7,
-        action_chunk_len=16,
     ):
         super().__init__()
         self.current_proj = nn.Linear(in_dim, hidden_size)
         self.future_proj  = nn.Linear(in_dim, hidden_size)
         self.state_proj   = nn.Linear(state_dim, hidden_size)
 
-        self.action_queries = nn.Parameter(torch.randn(1, action_chunk_len, hidden_size) * 0.02)
-        self.action_pos_emb = nn.Parameter(torch.randn(1, action_chunk_len, hidden_size) * 0.02)
+        self.action_queries = nn.Parameter(torch.randn(1, num_future_frames, hidden_size) * 0.02)
+        self.action_pos_emb = nn.Parameter(torch.randn(1, num_future_frames, hidden_size) * 0.02)
 
         self.blocks = nn.ModuleList([
-            IDMBlock(hidden_size, num_heads, mlp_ratio) for _ in range(depth)
+            Block(hidden_size, num_heads, num_sources=3, mlp_ratio=mlp_ratio, use_adaln=False, sa_first=False)
+            for _ in range(depth)
         ])
         self.norm     = nn.LayerNorm(hidden_size, eps=1e-6)
         self.out_proj = nn.Linear(hidden_size, action_dim)
@@ -126,8 +83,6 @@ class IDM(nn.Module):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-        nn.init.zeros_(self.out_proj.weight)
-        nn.init.zeros_(self.out_proj.bias)
 
     def forward(self, current_frames, future_frames, state):
         B = current_frames.shape[0]
@@ -142,7 +97,13 @@ class IDM(nn.Module):
         q = self.action_queries.expand(B, -1, -1) + self.action_pos_emb
 
         for block in self.blocks:
-            q = block(q, current, future, state_token, cur_pos, fut_pos)
+            q = block(
+                q,
+                sources=[current, future, state_token],
+                source_positions=[cur_pos, fut_pos, None],
+                cond=None,
+                q_pos=None,
+            )
 
         return self.out_proj(self.norm(q))
 
