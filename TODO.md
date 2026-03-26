@@ -1,0 +1,2 @@
+- Finalize the loss pseudocode (how to calculate loss in non-teacher forcing case? Wont there be multiple losses since we predict multiple vector fields?)
+- What benchmark to use for testing and comparing to other apporaches
