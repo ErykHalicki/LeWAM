@@ -2,23 +2,23 @@
 
 import pytest
 import torch
-from wam.models.DiT import DiT, DiT_S
+from wam.models.DiT import DiT, DiT_Baby
 
 
 B = 2
-K = 4   # future frames
-T = 2   # past frames
-H = 7   # patch grid height
-W = 7   # patch grid width
-S = 16  # language sequence length
-IN_DIM = 768
-LANG_DIM = 768
-STATE_DIM = 64
+K = 2   # future frames
+T = 1   # past frames
+H = 4   # patch grid height
+W = 4   # patch grid width
+S = 4   # language sequence length
+IN_DIM = 32
+LANG_DIM = 32
+STATE_DIM = 8
 
 
 @pytest.fixture(scope="module")
 def model():
-    m = DiT_S(
+    m = DiT_Baby(
         num_frames=K,
         num_past_frames=T,
         patch_h=H,
@@ -56,7 +56,7 @@ def test_output_shape_with_mask(model):
 
 
 def test_language_dropout():
-    m = DiT_S(
+    m = DiT_Baby(
         num_frames=K, num_past_frames=T, patch_h=H, patch_w=W,
         in_dim=IN_DIM, lang_dim=LANG_DIM, state_dim=STATE_DIM,
         language_dropout_prob=1.0,
@@ -68,7 +68,7 @@ def test_language_dropout():
 
 
 def test_state_dropout():
-    m = DiT_S(
+    m = DiT_Baby(
         num_frames=K, num_past_frames=T, patch_h=H, patch_w=W,
         in_dim=IN_DIM, lang_dim=LANG_DIM, state_dim=STATE_DIM,
         state_dropout_prob=1.0,
@@ -96,3 +96,84 @@ def test_timestep_embedding_varies():
         e0 = embedder(torch.zeros(B))
         e1 = embedder(torch.ones(B))
     assert not torch.allclose(e0, e1)
+
+
+def test_overfit_single_batch():
+    """Model should memorize a single batch (loss → ~0).
+
+    Synthetic flow matching task:
+      x_t = (1 - t) * x0 + t * x1,  target velocity = x1 - x0
+    Fixed x0, x1, conditioning — train until loss < 1e-2.
+    """
+    torch.manual_seed(0)
+    m = DiT_Baby(
+        num_frames=K, num_past_frames=T, patch_h=H, patch_w=W,
+        in_dim=IN_DIM, lang_dim=LANG_DIM, state_dim=STATE_DIM,
+        language_dropout_prob=0.0, state_dropout_prob=0.0,
+    )
+    m.train()
+
+    x0          = torch.randn(1, K * H * W, IN_DIM)
+    x1          = torch.randn(1, K * H * W, IN_DIM)
+    past_frames = torch.randn(1, T * H * W, IN_DIM)
+    l           = torch.randn(1, S, LANG_DIM)
+    state       = torch.randn(1, STATE_DIM)
+    target      = x1 - x0
+
+    opt = torch.optim.Adam(m.parameters(), lr=1e-3)
+    for step in range(200):
+        t = torch.rand(1)
+        x_t = (1 - t) * x0 + t * x1
+        v_pred = m(x_t, t, past_frames, l, state)
+        loss = torch.nn.functional.mse_loss(v_pred, target)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        print(f"step {step:03d}  loss={loss.item():.6f}")
+
+    assert loss.item() < 1e-2, f"Model failed to overfit single batch (loss={loss.item():.4f})"
+
+
+def test_ode_solve():
+    """After overfitting, Euler integration from x0 should arrive near x1.
+
+    Flow matching ODE:  dx/dt = v(x_t, t)
+    Euler:  x_{t+dt} = x_t + v(x_t, t) * dt
+    """
+    torch.manual_seed(0)
+    m = DiT_Baby(
+        num_frames=K, num_past_frames=T, patch_h=H, patch_w=W,
+        in_dim=IN_DIM, lang_dim=LANG_DIM, state_dim=STATE_DIM,
+        language_dropout_prob=0.0, state_dropout_prob=0.0,
+    )
+
+    x0          = torch.randn(1, K * H * W, IN_DIM)
+    x1          = torch.randn(1, K * H * W, IN_DIM)
+    past_frames = torch.randn(1, T * H * W, IN_DIM)
+    l           = torch.randn(1, S, LANG_DIM)
+    state       = torch.randn(1, STATE_DIM)
+
+    m.train()
+    opt = torch.optim.Adam(m.parameters(), lr=1e-3)
+    for step in range(200):
+        t = torch.rand(1)
+        x_t = (1 - t) * x0 + t * x1
+        v_pred = m(x_t, t, past_frames, l, state)
+        loss = torch.nn.functional.mse_loss(v_pred, x1 - x0)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        print(f"step {step:03d}  loss={loss.item():.6f}")
+
+    m.eval()
+    steps = 100
+    dt = 1.0 / steps
+    x = x0.clone()
+    with torch.no_grad():
+        for i in range(steps):
+            t = torch.tensor([i * dt])
+            x = x + m(x, t, past_frames, l, state) * dt
+
+    err = torch.nn.functional.mse_loss(x, x1).item()
+    print(f"ODE final error: {err:.6f}")
+    assert err < 0.1, f"ODE solve did not converge to x1 (err={err:.4f})"
