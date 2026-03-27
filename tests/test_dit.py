@@ -56,29 +56,6 @@ def test_output_shape_with_mask(model):
     assert out.shape == (B, K * H * W, IN_DIM)
 
 
-def test_language_dropout():
-    m = DiT_Baby(
-        num_frames=K, num_past_frames=T, patch_h=H, patch_w=W,
-        in_dim=IN_DIM, lang_dim=LANG_DIM, state_dim=STATE_DIM,
-        language_dropout_prob=1.0,
-    )
-    m.train()
-    x, t, past_frames, l, state, _ = make_inputs()
-    out = m(x, t, past_frames, l, state)
-    assert out.shape == (B, K * H * W, IN_DIM)
-
-
-def test_state_dropout():
-    m = DiT_Baby(
-        num_frames=K, num_past_frames=T, patch_h=H, patch_w=W,
-        in_dim=IN_DIM, lang_dim=LANG_DIM, state_dim=STATE_DIM,
-        state_dropout_prob=1.0,
-    )
-    m.train()
-    x, t, past_frames, l, state, _ = make_inputs()
-    out = m(x, t, past_frames, l, state)
-    assert out.shape == (B, K * H * W, IN_DIM)
-
 
 def test_no_nan_in_output(model):
     x, t, past_frames, l, state, _ = make_inputs()
@@ -110,7 +87,6 @@ def test_overfit_single_batch():
     m = DiT_Baby(
         num_frames=K, num_past_frames=T, patch_h=H, patch_w=W,
         in_dim=IN_DIM, lang_dim=LANG_DIM, state_dim=STATE_DIM,
-        language_dropout_prob=0.0, state_dropout_prob=0.0,
     )
     m.train()
 
@@ -169,7 +145,6 @@ def test_ode_solve():
     m = DiT_Baby(
         num_frames=K, num_past_frames=T, patch_h=H, patch_w=W,
         in_dim=IN_DIM, lang_dim=LANG_DIM, state_dim=STATE_DIM,
-        language_dropout_prob=0.0, state_dropout_prob=0.0,
     )
 
     x0          = torch.randn(1, K * H * W, IN_DIM)
