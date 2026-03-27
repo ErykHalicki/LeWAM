@@ -35,6 +35,7 @@ fi
 if [ ! -d "weights/t5gemma-s-s-prefixlm" ]; then
     echo "Downloading Gemma weights..."
     uv tool install hf
+    hf auth login --token $HF_TOKEN
     hf download google/t5gemma-s-s-prefixlm --local-dir ./weights/t5gemma-s-s-prefixlm
 else
     echo "Gemma weights already exist, skipping."
