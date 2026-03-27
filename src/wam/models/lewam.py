@@ -2,7 +2,7 @@ import torch.nn as nn
 
 from wam.models.DiT import DiT_models
 from wam.models.IDM import IDM_models
-from wam.models.encoders import StateEncoder, ActionDecoder
+from wam.models.encoders import StateEncoder, ActionDecoder, load_vjepa2_encoder, load_t5gemma_encoder
 
 
 class LeWAM(nn.Module):
@@ -84,8 +84,8 @@ class LeWAM(nn.Module):
 def build_lewam(
     video_encoder=None,
     language_encoder=None,
-    num_past_frames=4,
-    num_future_frames=8,
+    num_past_frames=15, # 1 second of context
+    num_future_frames=15, # 1 second of prediction
     patch_h=24,
     patch_w=24,
     in_dim=768,
@@ -136,3 +136,27 @@ def build_lewam(
         idm=idm,
         action_decoder=action_decoder,
     )
+
+
+def build_lewam_with_encoders(
+    vjepa2_checkpoint: str,
+    t5gemma_checkpoint: str = None,
+    t5gemma_model_id: str = "google/t5gemma-s-s-prefixlm",
+    crop_size: int = 384,
+    t5gemma_device_map: str = "auto",
+    **kwargs,
+) -> LeWAM:
+    """
+    Build a full LeWAM with real VJEPA2 and T5Gemma weights loaded.
+
+    vjepa2_checkpoint: path to VJEPA2 .pt checkpoint
+    t5gemma_model_id:  HuggingFace model ID for T5Gemma
+    crop_size:         spatial crop size fed to VJEPA2 (384 = training resolution)
+    t5gemma_device_map: device placement for T5Gemma (e.g. "auto", "cpu", "cuda")
+    **kwargs:          forwarded to build_lewam (dit_size, idm_size, num_past_frames, etc.)
+
+    Both encoders are frozen by default.
+    """
+    video_enc = load_vjepa2_encoder(vjepa2_checkpoint, crop_size=crop_size)
+    lang_enc  = load_t5gemma_encoder(t5gemma_model_id, path=t5gemma_checkpoint, device_map=t5gemma_device_map)
+    return build_lewam(video_encoder=video_enc, language_encoder=lang_enc, **kwargs)

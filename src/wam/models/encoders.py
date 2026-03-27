@@ -116,6 +116,73 @@ class GemmaLanguageEncoder(LanguageEncoder):
         return out.last_hidden_state, mask
 
 
+def load_vjepa2_encoder(checkpoint_path: str, crop_size: int = 384) -> "VJEPA2VideoEncoder":
+    """
+    Load a VJEPA2-B encoder from a checkpoint file.
+
+    checkpoint_path: path to .pt file (e.g. weights/vjepa2_1_vitb_dist_vitG_384.pt)
+    crop_size:       spatial resolution fed to the backbone (384 matches training resolution)
+    → VJEPA2VideoEncoder ready for eval (frozen by default)
+    """
+    from vjepa2.app.vjepa_2_1.models.vision_transformer import vit_base
+
+    backbone = vit_base(
+        patch_size=16,
+        img_size=(384, 384),
+        num_frames=16,
+        tubelet_size=2,
+        use_sdpa=True,
+        use_SiLU=False,
+        wide_SiLU=True,
+        uniform_power=True,
+        use_rope=True,
+        img_temporal_dim_size=1,
+        interpolate_rope=True,
+    )
+    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    sd = {
+        k.replace("module.", "").replace("backbone.", ""): v
+        for k, v in ckpt["ema_encoder"].items()
+    }
+    backbone.load_state_dict(sd, strict=True)
+    backbone.eval()
+    enc = VJEPA2VideoEncoder(backbone, crop_size=crop_size)
+    enc.set_frozen(False)
+    return enc
+
+
+def load_t5gemma_encoder(
+    model_id: str = "google/t5gemma-s-s-prefixlm",
+    path=None,
+    torch_dtype=None,
+    device_map: str = "auto",
+) -> "GemmaLanguageEncoder":
+    """
+    Load a T5Gemma encoder from HuggingFace.
+
+    model_id:    HuggingFace model ID
+    torch_dtype: dtype for weights (defaults to bfloat16)
+    device_map:  device placement strategy
+    → GemmaLanguageEncoder (frozen by default)
+    """
+    import torch
+    from transformers import T5GemmaEncoderModel
+
+    if torch_dtype is None:
+        torch_dtype = torch.bfloat16
+
+    backbone = T5GemmaEncoderModel.from_pretrained(
+        model_id if path is None else path,
+        torch_dtype=torch_dtype,
+        device_map=device_map,
+        is_encoder_decoder=False, # im not sure why this works
+    )
+    backbone.eval()
+    enc = GemmaLanguageEncoder(backbone, model_id)
+    enc.set_frozen(True)
+    return enc
+
+
 class StateEncoder(nn.Module):
     """
     Shared MLP encoder for proprioceptive state.
