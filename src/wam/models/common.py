@@ -8,10 +8,20 @@ import torch.nn.functional as F
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
+
+class SwiGLULinear(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.w      = nn.Linear(in_dim, out_dim)
+        self.w_gate = nn.Linear(in_dim, out_dim)
+
+    def forward(self, x):
+        return self.w(x) * F.silu(self.w_gate(x))
+
+
 def make_mlp(in_dim, hidden_dim, out_dim):
     return nn.Sequential(
-        nn.Linear(in_dim, hidden_dim),
-        nn.GELU(approximate="tanh"),
+        SwiGLULinear(in_dim, hidden_dim),
         nn.Linear(hidden_dim, out_dim),
     )
 

@@ -1,8 +1,5 @@
 
 ## Implementation
-- make noise interpolation visualizer
-- add language embedding adaptation head 
-    - keep the backbone frozen, but get better alignment by adding a small mlp after the ecoder output
 - create loss calculations
     - main question: how to deal with multiple denoising steps in the non teacher forcing case?
     - maybe just detach the predicted embeddings and only backprop through the IDM?
@@ -10,6 +7,8 @@
         - so just treating it as multiple steps of the prediction loss?
     - dont even include the prediciton loss? instead allow backprop directly from action error?
     - is there any precedent for this?
+- make sure multicamera case will work
+    - 3drope must work correctly (indpendantly on each camera)
 - create full LeWAM module 
 - create seperate action decoder and state encoder (MLPs)
     - action decoder should decode each action equally

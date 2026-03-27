@@ -24,3 +24,8 @@ dependencies = [
     "safetensors>=0.7",
     "tokenizers>=0.22",
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::FutureWarning:timm",
+]

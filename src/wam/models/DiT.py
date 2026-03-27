@@ -24,17 +24,13 @@ import math
 import torch
 import torch.nn as nn
 
-from wam.models.common import Block, modulate
+from wam.models.common import Block, modulate, make_mlp
 
 
 class TimestepEmbedder(nn.Module):
     def __init__(self, hidden_size=768, frequency_embedding_size=768):
         super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
-            nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size, bias=True),
-        )
+        self.mlp = make_mlp(frequency_embedding_size, hidden_size, hidden_size)
         self.frequency_embedding_size = frequency_embedding_size
 
     @staticmethod
@@ -95,7 +91,7 @@ class DiT(nn.Module):
         depth=12,
         num_heads=12,
         mlp_ratio=4.0,
-        lang_dim=768,
+        lang_dim=512,
         state_dim=64,
         language_dropout_prob=0.15,
         state_dropout_prob=0.15,
@@ -108,7 +104,7 @@ class DiT(nn.Module):
         self.x_embedder   = nn.Linear(in_dim, hidden_size)
         self.t_embedder   = TimestepEmbedder(hidden_size)
         self.context_proj = nn.Linear(in_dim, hidden_size)
-        self.lang_proj    = nn.Linear(lang_dim, hidden_size)
+        self.lang_proj    = make_mlp(lang_dim, hidden_size, hidden_size)
         self.state_proj   = nn.Linear(state_dim, hidden_size)
 
         self.blocks = nn.ModuleList([
@@ -141,13 +137,14 @@ class DiT(nn.Module):
     def initialize_weights(self):
         def _basic_init(module):
             if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
+                nn.init.kaiming_uniform_(module.weight, nonlinearity='relu')
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
         self.apply(_basic_init)
 
-        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
-        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[0].w.weight,      std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[0].w_gate.weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[1].weight,         std=0.02)
 
         for block in self.blocks:
             nn.init.zeros_(block.adaLN_modulation[-1].weight)

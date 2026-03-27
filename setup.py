@@ -1,6 +1,6 @@
 from setuptools import setup, find_namespace_packages
 
-wam_packages = find_namespace_packages("src", exclude=["vjepa2*", "scripts*"])
+wam_packages = find_namespace_packages("src", exclude=["vjepa2*", "wam/scripts*"])
 
 vjepa2_internal = find_namespace_packages("src/vjepa2", include=["app*", "evals*", "src*"])
 vjepa2_external = ["vjepa2"] + [f"vjepa2.{p}" for p in vjepa2_internal]
