@@ -1,19 +1,9 @@
 
 ## Implementation
-- create loss calculations
-    - main question: how to deal with multiple denoising steps in the non teacher forcing case?
-    - maybe just detach the predicted embeddings and only backprop through the IDM?
-    - can also run a full ODE solve and take an MSE of each generated loss (i.e. how wrong was the vector field at each integration step)
-        - so just treating it as multiple steps of the prediction loss?
-    - dont even include the prediciton loss? instead allow backprop directly from action error?
-    - is there any precedent for this?
-- make sure multicamera case will work
-    - 3drope must work correctly (indpendantly on each camera)
-- create full LeWAM module 
-- create seperate action decoder and state encoder (MLPs)
-    - action decoder should decode each action equally
-    - i.e. all action latents share decoder weights regardless of horizon 
+
 - create training loop
+- make the ground truth actions and patch embeddings are correctly synced
+    - VJEPA2 pairs frames, so there are in_frames/2 output frames. Make sure that the relative actions account for this correctly
 - test final model parameter count, test feasibility of using 300M VJEPA2.1 checkpoint (ViT L instead of B)
 - find a well curated pre training dataset with language captions of videos if possible
 - create a decoder for visualizing predicted embeddings

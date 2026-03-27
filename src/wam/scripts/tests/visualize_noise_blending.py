@@ -20,5 +20,4 @@ for ax, t in zip(axes, timesteps):
     ax.axis("off")
 
 plt.tight_layout()
-plt.savefig("src/wam/scripts/tests/noise_blending.png", dpi=150)
 plt.show()

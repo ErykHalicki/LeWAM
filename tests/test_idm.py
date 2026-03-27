@@ -5,14 +5,15 @@ import torch
 from wam.models.IDM import IDM, IDM_Baby
 
 
-B          = 2
-T          = 1   # past frames
-K          = 2   # future frames
-H          = 4   # patch grid height
-W          = 4   # patch grid width
-IN_DIM     = 32
-STATE_DIM  = 8
-ACTION_DIM = 7
+B                 = 2
+T                 = 1   # past frames
+K                 = 2   # future frames
+H                 = 4   # patch grid height
+W                 = 4   # patch grid width
+IN_DIM            = 32
+STATE_DIM         = 8
+ACTION_LATENT_DIM = 16
+NUM_AUX           = 2   # auxiliary cameras
 
 
 @pytest.fixture(scope="module")
@@ -24,7 +25,7 @@ def model():
         patch_w=W,
         in_dim=IN_DIM,
         state_dim=STATE_DIM,
-        action_dim=ACTION_DIM,
+        action_latent_dim=ACTION_LATENT_DIM,
     )
     m.eval()
     return m
@@ -41,7 +42,7 @@ def test_output_shape(model):
     current, future, state = make_inputs()
     with torch.no_grad():
         out = model(current, future, state)
-    assert out.shape == (B, K, ACTION_DIM)
+    assert out.shape == (B, K, ACTION_LATENT_DIM)
 
 
 def test_chunk_len_equals_num_future_frames(model):
@@ -70,14 +71,14 @@ def test_overfit_single_batch():
         patch_w=W,
         in_dim=IN_DIM,
         state_dim=STATE_DIM,
-        action_dim=ACTION_DIM,
+        action_latent_dim=ACTION_LATENT_DIM,
     )
     m.train()
 
     current     = torch.randn(1, T * H * W, IN_DIM)
     future      = torch.randn(1, K * H * W, IN_DIM)
     state       = torch.randn(1, STATE_DIM)
-    target      = torch.randn(1, K, ACTION_DIM)
+    target      = torch.randn(1, K, ACTION_LATENT_DIM)
 
     opt = torch.optim.Adam(m.parameters(), lr=1e-3)
     for step in range(200):
@@ -89,6 +90,23 @@ def test_overfit_single_batch():
         print(f"step {step:03d}  loss={loss.item():.6f}")
 
     assert loss.item() < 1e-2, f"Model failed to overfit single batch (loss={loss.item():.4f})"
+
+
+def test_aux_frames_output_shape(model):
+    current, future, state = make_inputs()
+    aux_frames = torch.randn(B, NUM_AUX * T * H * W, IN_DIM)
+    with torch.no_grad():
+        out = model(current, future, state, aux_frames=aux_frames)
+    assert out.shape == (B, K, ACTION_LATENT_DIM)
+
+
+def test_aux_frames_changes_output(model):
+    current, future, state = make_inputs()
+    aux_frames = torch.randn(B, NUM_AUX * T * H * W, IN_DIM)
+    with torch.no_grad():
+        out_no_aux = model(current, future, state)
+        out_aux    = model(current, future, state, aux_frames=aux_frames)
+    assert not torch.allclose(out_no_aux, out_aux)
 
 
 def test_different_frames_give_different_actions(model):

@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from PIL import Image
 
-from vjepa2.evals.hub.preprocessor import vjepa2_preprocessor
 from vjepa2.app.vjepa_2_1.models.vision_transformer import vit_base
+from wam.models.encoders import VJEPA2VideoPreprocessor
 
 crop_size = 512
-processor = vjepa2_preprocessor(crop_size=crop_size)
+processor = VJEPA2VideoPreprocessor(crop_size=crop_size)
 
 model = vit_base(
     patch_size=16,
@@ -29,15 +29,15 @@ encoder_sd = {k.replace("module.", "").replace("backbone.", ""): v for k, v in s
 model.load_state_dict(encoder_sd, strict=True)
 model.eval()
 
-img = Image.open('src/scripts/test.avif').convert('RGB')
+img = Image.open('src/wam/scripts/tests/test.avif').convert('RGB')
 frame = torch.from_numpy(np.array(img)).permute(2, 0, 1)  # C x H x W
 raw_frames = frame.unsqueeze(0).repeat(8, 1, 1, 1)  # T x C x H x W
 
-video = processor(raw_frames)[0]  # C x T x H x W
+video = processor(raw_frames.unsqueeze(0))  # (1, C, T, H, W)
 print(video.shape)
 
 with torch.no_grad():
-    video_embeddings = model(video.unsqueeze(0))
+    video_embeddings = model(video)
 
 print(video_embeddings.shape)
 

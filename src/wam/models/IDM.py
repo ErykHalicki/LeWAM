@@ -6,7 +6,7 @@
 #   future_frames (B, K*H*W, in_dim)             predicted (or GT) future patch embeddings
 #   state         (B, state_dim)|None            proprioceptive state vector
 #   aux_frames    (B, C*T*H*W, in_dim)|None      auxiliary camera past frames (not predicted)
-#   → returns     (B, chunk_len, action_dim)     predicted action chunk
+#   → returns     (B, chunk_len, action_latent_dim)  action latents (pass to ActionDecoder for actions)
 #
 # Each Block: SA (bidirectional, no RoPE, no adaLN) → CA (past+RoPE, future+RoPE, state, aux+RoPE) → MLP
 # Loss (not in this file): MSE(a_pred, a_gt)
@@ -22,7 +22,9 @@ class IDM(nn.Module):
     """
     Inverse Dynamics Model: predicts an action chunk given past and future patch embeddings.
 
-    p(a_t | z_t, z_{t+1}, s_t)
+    p(a_latent | z_t, z_{t+1}, s_t)
+
+    Outputs action latents (B, K, action_latent_dim). Pass through ActionDecoder to get actions.
 
     past_frames:  (B, T*H*W, in_dim)        main camera
     future_frames: (B, K*H*W, in_dim)
@@ -41,7 +43,7 @@ class IDM(nn.Module):
         num_heads=12,
         mlp_ratio=4.0,
         state_dim=64,
-        action_dim=7,
+        action_latent_dim=64,
     ):
         super().__init__()
         self.num_past_frames = num_past_frames
@@ -60,7 +62,7 @@ class IDM(nn.Module):
             for _ in range(depth)
         ])
         self.norm     = nn.LayerNorm(hidden_size, eps=1e-6)
-        self.out_proj = nn.Linear(hidden_size, action_dim)
+        self.out_proj = nn.Linear(hidden_size, action_latent_dim)
 
         self.register_buffer('past_t_ids', self._t_ids(0,               num_past_frames,   patch_h, patch_w), persistent=False)
         self.register_buffer('past_h_ids', self._h_ids(num_past_frames,                    patch_h, patch_w), persistent=False)

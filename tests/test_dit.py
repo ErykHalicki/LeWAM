@@ -14,6 +14,7 @@ S = 4   # language sequence length
 IN_DIM = 32
 LANG_DIM = 32
 STATE_DIM = 8
+NUM_AUX = 2  # auxiliary cameras
 
 
 @pytest.fixture(scope="module")
@@ -51,7 +52,7 @@ def test_output_shape(model):
 def test_output_shape_with_mask(model):
     x, t, past_frames, l, state, l_mask = make_inputs(with_mask=True)
     with torch.no_grad():
-        out = model(x, t, past_frames, l, state, l_mask)
+        out = model(x, t, past_frames, l, state, l_mask=l_mask)
     assert out.shape == (B, K * H * W, IN_DIM)
 
 
@@ -132,6 +133,30 @@ def test_overfit_single_batch():
         print(f"step {step:03d}  loss={loss.item():.6f}")
 
     assert loss.item() < 1e-2, f"Model failed to overfit single batch (loss={loss.item():.4f})"
+
+
+def test_aux_frames_output_shape(model):
+    x, t, past_frames, l, state, _ = make_inputs()
+    aux_frames = torch.randn(B, NUM_AUX * T * H * W, IN_DIM)
+    with torch.no_grad():
+        out = model(x, t, past_frames, l, state, aux_frames=aux_frames)
+    assert out.shape == (B, K * H * W, IN_DIM)
+
+
+def test_aux_frames_in_computation_graph():
+    import torch.nn as nn
+    m = DiT_Baby(
+        num_frames=K, num_past_frames=T, patch_h=H, patch_w=W,
+        in_dim=IN_DIM, lang_dim=LANG_DIM, state_dim=STATE_DIM,
+    )
+    nn.init.kaiming_uniform_(m.final_layer.linear.weight, nonlinearity='relu')
+    m.train()
+    x, t, past_frames, l, state, _ = make_inputs()
+    aux_frames = torch.randn(B, NUM_AUX * T * H * W, IN_DIM, requires_grad=True)
+    out = m(x, t, past_frames, l, state, aux_frames=aux_frames)
+    out.sum().backward()
+    assert aux_frames.grad is not None
+    assert aux_frames.grad.abs().sum() > 0
 
 
 def test_ode_solve():
