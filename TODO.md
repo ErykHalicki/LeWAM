@@ -1,5 +1,8 @@
 
 ## Implementation
+- make noise interpolation visualizer
+- add language embedding adaptation head 
+    - keep the backbone frozen, but get better alignment by adding a small mlp after the ecoder output
 - create loss calculations
     - main question: how to deal with multiple denoising steps in the non teacher forcing case?
     - maybe just detach the predicted embeddings and only backprop through the IDM?
@@ -23,6 +26,8 @@
     - visualize predicted outputs
 - come up with training schedule
     - pre training, mid training?, post training
+    - maybe the distribution of `tau` can slowly shift higher as training goes on? i.e warming up on low noise amounts, and then progressively increasing the noise mean
+        - although there isnt really a strong reason to do this
 - pre-compute and cache language embeddings offline (T5GemmaEncoderModel, frozen), no need to run encoder at training time, just load tensors
 
 ## Evaluation
@@ -34,9 +39,6 @@
 - Test on real hardware depending on simulated results
 
 ## Research
-- make default viewer of vimtext run OpenPDF nvim command instead of preview
 - update architecture.tex to match real code
+    - make architecture diagram for DiT specifically as well
 - write up basic motivation in main.tex
-- add facebook DiT to references
-- add dreamzero to references
-- add LeWorldModel to references

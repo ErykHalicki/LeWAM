@@ -1,37 +1,213 @@
 \documentclass{article}
+
+\usepackage[preprint]{corl_2026}
+
+\usepackage{amsmath, amssymb}
 \usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{subcaption}
 \usepackage{tikz}
-\usepackage[backend=biber,style=alphabetic]{biblatex}
 \usetikzlibrary{arrows.meta, positioning, calc}
+
 \definecolor{cblue}{HTML}{4A90D9}
 \definecolor{cgreen}{HTML}{5BAD72}
 \definecolor{corange}{HTML}{E8863A}
 \definecolor{cpurple}{HTML}{9B6BBE}
 \definecolor{cgray}{HTML}{7F8C8D}
-\addbibresource{ref.bib}
 
-% Preamble end
+\title{LeWAM: A Low-Cost World Action Model via Latent Flow Matching}
 
-\title{LeWorldActionModel}
-\author{Eryk Halicki}
-\date{March 2026}
+\author{
+  Eryk Halicki\\
+  University of British Columbia, ETH Zurich\\
+  \texttt{ehalicki@student.ubc.ca}\\
+}
 
 \begin{document}
 
 \maketitle
 
+\begin{abstract}
+World Action Models (WAMs) that predict future video latents and decode actions from those predictions have recently shown strong zero-shot generalization across robot embodiments~\citep{DreamZero}.
+However, existing WAMs rely on large-scale compute infrastructure that is inaccessible to most researchers.
+We present \textbf{LeWAM}, a compact World Action Model designed to run on consumer hardware.
+LeWAM combines a frozen-pretrained V-JEPA2 video encoder with a lightweight flow-matching Diffusion Transformer (DiT) that predicts future patch embeddings in latent space, and an Inverse Dynamics Model (IDM) that decodes action chunks from the predicted transitions.
+The separation of video prediction and action decoding allows the DiT to be pretrained on unlabeled internet video, and the IDM to be finetuned independently on small robot datasets.
+We apply Sketched Isotropic Gaussian Regularization (SIGReg)~\citep{LeJEPA,LeWorldModel} to stabilize JEPA training and train on the SmolVLA community dataset~\citep{SmolVLA}.
+Despite operating at a fraction of the parameter count of prior WAMs, LeWAM achieves competitive performance on [TODO: benchmark], demonstrating that strong video-conditioned action prediction does not require server-scale compute.
+\end{abstract}
+
+\keywords{World Action Model, Robot Learning, Flow Matching, Efficient Inference, Video Prediction}
+
+%===============================================================================
+
 \section{Introduction}
 
-\section{Model Architecture}
+[TODO]
+
+%===============================================================================
+
+\section{Related Work}
+
+\paragraph{World Action Models.}
+\citet{DreamZero} introduced the World Action Model framework, showing that a video world model pretrained on internet-scale data can serve as a zero-shot policy across diverse robot embodiments when paired with an inverse dynamics model.
+LeWAM adopts the same two-stage architecture but targets the low-compute regime.
+
+\paragraph{Video self-supervised learning.}
+V-JEPA~2\citep{vjepa2_1} and LeWorldModel~\citep{LeWorldModel} demonstrate that training predictors in the latent space of a video encoder is substantially more compute-efficient than pixel-space prediction.
+We use the V-JEPA~2 ViT-L encoder as our visual backbone and propagate gradients through it end-to-end.
+
+\paragraph{Stable JEPA training.}
+Sketched Isotropic Gaussian Regularization (SIGReg), introduced in \citet{LeJEPA} and applied in \citet{LeWorldModel}, prevents representational collapse in JEPA-style models without requiring stop-gradient tricks.
+We include SIGReg as an auxiliary loss throughout all training stages.
+
+\paragraph{Diffusion Transformers and flow matching.}
+DiT~\citep{DiT} established the transformer as a competitive backbone for diffusion models, replacing U-Nets with scalable attention blocks.
+Flow matching~\citep{FlowMatching} offers a simpler and more stable training objective than DDPM-style diffusion by directly regressing the velocity field of a linear interpolation between noise and data.
+We use flow matching with a DiT backbone, conditioning via cross-attention rather than AdaLN-Zero, following \citet{GenTron}.
+
+\paragraph{3D positional encoding.}
+3D-RoPE~\citep{ThreeDRoPE} extends Rotary Position Embeddings to temporal, height, and width axes, enabling length generalization beyond training resolution.
+It is adopted in V-JEPA~2~\citep{vjepa2_1} and DreamZero~\citep{DreamZero}; we apply it to all spatial attention operations in both the DiT and IDM.
+
+\paragraph{Small-scale VLAs.}
+SmolVLA~\citep{SmolVLA} demonstrates that compact vision-language-action models trained with flow matching are competitive with much larger counterparts. [TODO: expand]
+
+%===============================================================================
+
+\section{Method}
+
+\subsection{Overview}
+
+LeWAM consists of three components: (1) a \textbf{visual encoder} that maps video frames to per-patch latent embeddings; (2) a \textbf{flow-matching DiT} that predicts future latent embeddings conditioned on past frames and a language instruction; and (3) an \textbf{Inverse Dynamics Model (IDM)} that decodes an action chunk from the current and predicted future embeddings.
+Figure~\ref{fig:arch} illustrates the full system.
+
 \begin{figure}[h]
     \centering
     \resizebox{\textwidth}{!}{\input{architecture.tex}}
-    \caption{Model architecture.}
+    \caption{LeWAM architecture. The V-JEPA~2 encoder maps input frames to patch embeddings. The DiT predicts future patch embeddings via flow matching, conditioned on past frames and a language instruction from a frozen T5Gemma encoder. The IDM cross-attends to current and predicted future patches to produce an action chunk.}
+    \label{fig:arch}
 \end{figure}
-\cite{vjepa2_1}
-\cite{LeJEPA}
-\cite{3DRoPE}
 
-\printbibliography
+%---------------------------------------
+
+\subsection{Visual Encoder}
+
+We use V-JEPA~2~\citep{vjepa2_1} ViT-L as our visual encoder. It operates on video clips of $T$ frames at resolution $H \times W$ with patch size $16 \times 16$ and tubelet size 2. For a $256 \times 256$ input, each frame produces a $16 \times 16$ grid of patch tokens, giving a total of $T \cdot H_p \cdot W_p$ tokens with embedding dimension $D_{\text{enc}} = 1024$. The encoder is initialized from the V-JEPA~2 pretrained weights and is \emph{not} frozen during training; gradients flow through it from both the DiT and IDM losses.
+
+%---------------------------------------
+
+\subsection{Language Encoder}
+
+We use T5Gemma-S~\citep{T5Gemma} for its compact size (270M parameters) and text-only design, using only the encoder to obtain instruction embeddings. Language instructions are encoded into a sequence of $S$ token embeddings of dimension $D_{\text{lang}} = 512$. During training, the language conditioning is dropped with probability $p_{\text{drop}} = 0.15$ to enable classifier-free guidance at inference time \cite{DreamZero}. TODO is classifier-free guidance even important in robotics?
+
+%---------------------------------------
+
+\subsection{Latent Predictor: Flow-Matching DiT}
+
+Given the current patch embeddings $z_{\text{cur}} \in \mathbb{R}^{T H_p W_p \times D_{\text{enc}}}$, the DiT predicts the patch embeddings of $K$ future frames $z_{\text{fut}} \in \mathbb{R}^{K H_p W_p \times D_{\text{enc}}}$.
+
+\paragraph{Flow matching objective.}
+We define a linear interpolation between a noise sample $x_0 \sim \mathcal{N}(0, I)$ and the ground-truth future embeddings $z_{\text{fut}}$:
+\begin{equation}
+    x_t = (1 - t)\, x_0 + t\, z_{\text{fut}}, \quad t \sim \mathcal{U}[0, 1].
+\end{equation}
+The DiT is trained to predict the velocity field $v^* = z_{\text{fut}} - x_0$:
+\begin{equation}
+    \mathcal{L}_{\text{pred}} = \mathbb{E}_{t,\, x_0}\left[\left\| v_\theta(x_t,\, t,\, z_{\text{cur}},\, l,\, s) - (z_{\text{fut}} - x_0) \right\|^2\right],
+\end{equation}
+where $l$ denotes the language token sequence and $s \in \mathbb{R}^{D_s}$ is the proprioceptive state.
+
+\paragraph{Architecture.}
+The DiT projects $x_t$ and $z_{\text{cur}}$ to a hidden dimension $D = 768$ via linear embedders. It applies $N_{\text{DiT}} = 12$ transformer blocks, each consisting of:
+\begin{enumerate}
+    \item \textbf{Self-attention} over noisy future tokens with 3D-RoPE positional encoding and adaLN-Zero conditioning on the timestep embedding $\tau(t)$.
+    \item \textbf{Cross-attention} to past frame tokens (with 3D-RoPE), language tokens (no RoPE), and a state token (no RoPE), with all sources concatenated as keys and values.
+    \item \textbf{MLP} with adaLN-Zero conditioning.
+\end{enumerate}
+3D-RoPE splits the per-head dimension as $d/4$ temporal, $d/4$ height, $d/2$ width. The model has 12 attention heads and an MLP expansion ratio of 4, giving approximately [TODO: count] parameters. A final linear layer projects back to $D_{\text{enc}}$.
+
+At inference, $z_{\text{fut}}$ is recovered by integrating the learned velocity field from $t=0$ to $t=1$ using an ODE solver.
+
+%---------------------------------------
+
+\subsection{Inverse Dynamics Model}
+
+The IDM predicts an action chunk $\hat{a}_{1:K} \in \mathbb{R}^{K \times D_a}$ (with $D_a = 7$) from the current and future patch embeddings.
+
+\paragraph{Architecture.}
+The IDM maintains $K$ learned action query tokens and applies $N_{\text{IDM}} = 6$ transformer blocks, each consisting of:
+\begin{enumerate}
+    \item \textbf{Cross-attention} from action queries to current frame tokens and future frame tokens (both with 3D-RoPE), and to a state token.
+    \item \textbf{Self-attention} over action queries (bidirectional, no positional encoding).
+    \item \textbf{MLP}.
+\end{enumerate}
+The IDM uses standard LayerNorm throughout (no adaLN). The final action token representations are projected to $D_a$ via a linear head.
+
+\paragraph{Training.}
+The IDM is supervised with an MSE loss on the action chunk:
+\begin{equation}
+    \mathcal{L}_{\text{IDM}} = \left\| \hat{a}_{1:K} - a_{1:K}^* \right\|^2.
+\end{equation}
+To bridge the train/test gap between ground-truth and predicted future embeddings, we use \textbf{teacher forcing}: with probability $p_{\text{tf}}$, the IDM is conditioned on the ground-truth future patches; otherwise on embeddings generated by the DiT via ODE solving. [TODO: tune $p_{\text{tf}}$]
+
+%---------------------------------------
+
+\subsection{Training Objectives}
+
+The combined training loss is:
+\begin{equation}
+    \mathcal{L} = \mathcal{L}_{\text{pred}} + \lambda_{\text{IDM}}\, \mathcal{L}_{\text{IDM}} + \lambda_{\text{SIGReg}}\, \mathcal{L}_{\text{SIGReg}}(Z),
+\end{equation}
+where $\mathcal{L}_{\text{SIGReg}}$ is the Sketched Isotropic Gaussian Regularization loss~\citep{LeJEPA} applied to the encoder output $Z$ to prevent representational collapse. During video-only pretraining (no action labels), the IDM term is dropped.
+
+%---------------------------------------
+
+\subsection{Data}
+
+\paragraph{Video pretraining.}
+Before finetuning on robot data, we pretrain the DiT and the V-JEPA~2 encoder jointly on Something-Something v2 (SSv2)~\citep{SomethingSomething}, a large-scale dataset of 220k crowd-sourced videos depicting humans performing 174 fine-grained manipulation categories (\emph{e.g.}\ ``pushing something from left to right'', ``pouring something into something'').
+SSv2 is particularly well-suited for this purpose because its clips are action-centric, object-interaction-heavy, and temporally causal in a way that mirrors the structure of robot manipulation, unlike scene-centric datasets such as Kinetics.
+Each clip is annotated with a natural-language action label, which we use as the language conditioning signal for the DiT, allowing the text and vision encoders to align on grounded, manipulation-relevant concepts before any robot data is seen.
+During this stage the language encoder (T5Gemma-S) remains frozen and only the DiT and V-JEPA~2 encoder weights are updated.
+The training objective is $\mathcal{L}_{\text{pred}} + \lambda_{\text{SIGReg}}\,\mathcal{L}_{\text{SIGReg}}$ (no IDM term, as SSv2 carries no action labels).
+[TODO: add number of pretraining steps/epochs.]
+
+\paragraph{Robot finetuning.} We finetune on the SmolVLA community dataset~\citep{SmolVLA} (HuggingFaceVLA/community\_dataset\_v2), a collection of robot manipulation demonstrations collected on the SO-101 low-cost robot arm. [TODO: add dataset statistics — number of episodes, tasks.]
+
+\paragraph{Preprocessing.} Videos are resized to $384 \times 384$. Spatial patches of size $16 \times 16$ are extracted, giving a $24 \times 24$ token grid per frame. Frames are grouped into tubelets of size 2 along the temporal axis, halving the temporal token count. [TODO: describe action normalization, proprioceptive state preprocessing.]
+
+%===============================================================================
+
+\section{Experiments}
+
+[TODO]
+
+%===============================================================================
+
+\section{Results}
+
+[TODO]
+
+%===============================================================================
+
+\section{Discussion}
+
+[TODO]
+
+%===============================================================================
+
+\section{Conclusion}
+
+[TODO]
+
+\acknowledgments{}
+
+\bibliography{ref}
+
+\appendix
+\section{Appendix}
 
 \end{document}

@@ -143,6 +143,7 @@ tests/
 ## Datasets
 
 [SmolVLA Training Set](https://huggingface.co/datasets/HuggingFaceVLA/community_dataset_v2)
+[SomethingSomethingV2](https://huggingface.co/datasets/HuggingFaceM4/something_something_v2)
 
 ---
 
