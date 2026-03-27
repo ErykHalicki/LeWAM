@@ -126,6 +126,8 @@ class CrossAttention(nn.Module):
         Ks, Vs = [], []
         combined_mask = None
         for i, src in enumerate(sources):
+            if src is None:
+                continue
             K_i = split_heads(self.k_projs[i](src), self.num_heads, self.head_dim)
             V_i = split_heads(self.v_projs[i](src), self.num_heads, self.head_dim)
             pos_i = source_positions[i] if source_positions is not None else None

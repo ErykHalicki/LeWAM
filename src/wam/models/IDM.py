@@ -1,31 +1,33 @@
 # --------------------------------------------------------
 # Inverse Dynamics Model (IDM)
 #
-# IDM forward(current_frames, future_frames, state):
-#   current_frames (B, T*H*W, in_dim)   current frame patch embeddings
-#   future_frames  (B, K*H*W, in_dim)   predicted (or GT) future patch embeddings
-#   state          (B, state_dim)       proprioceptive state vector
-#   → returns      (B, chunk_len, action_dim)   predicted action chunk
+# IDM forward(past_frames, future_frames, state, aux_frames):
+#   past_frames  (B, T*H*W, in_dim)              past frame patch embeddings (main camera)
+#   future_frames (B, K*H*W, in_dim)             predicted (or GT) future patch embeddings
+#   state         (B, state_dim)|None            proprioceptive state vector
+#   aux_frames    (B, C*T*H*W, in_dim)|None      auxiliary camera past frames (not predicted)
+#   → returns     (B, chunk_len, action_dim)     predicted action chunk
 #
-# Each Block: SA (bidirectional, no RoPE, no adaLN) → CA (current+RoPE, future+RoPE, state) → MLP
+# Each Block: SA (bidirectional, no RoPE, no adaLN) → CA (past+RoPE, future+RoPE, state, aux+RoPE) → MLP
 # Loss (not in this file): MSE(a_pred, a_gt)
 # --------------------------------------------------------
 
 import torch
 import torch.nn as nn
 
-from wam.models.common import Block
+from wam.models.common import Block, make_mlp
 
 
 class IDM(nn.Module):
     """
-    Inverse Dynamics Model: predicts an action chunk given current and future patch embeddings.
+    Inverse Dynamics Model: predicts an action chunk given past and future patch embeddings.
 
     p(a_t | z_t, z_{t+1}, s_t)
 
-    current_frames: (B, T*H*W, in_dim)
-    future_frames:  (B, K*H*W, in_dim)
-    state:          (B, state_dim)
+    past_frames:  (B, T*H*W, in_dim)        main camera
+    future_frames: (B, K*H*W, in_dim)
+    state:         (B, state_dim)|None
+    aux_frames:    (B, C*T*H*W, in_dim)|None
     """
     def __init__(
         self,
@@ -42,26 +44,30 @@ class IDM(nn.Module):
         action_dim=7,
     ):
         super().__init__()
-        self.current_proj = nn.Linear(in_dim, hidden_size)
-        self.future_proj  = nn.Linear(in_dim, hidden_size)
-        self.state_proj   = nn.Linear(state_dim, hidden_size)
+        self.num_past_frames = num_past_frames
+        self.patch_h = patch_h
+        self.patch_w = patch_w
+        self.past_proj   = nn.Linear(in_dim, hidden_size)
+        self.future_proj = nn.Linear(in_dim, hidden_size)
+        self.state_proj  = nn.Linear(state_dim, hidden_size)
+        self.aux_proj    = make_mlp(in_dim, hidden_size, hidden_size)
 
         self.action_queries = nn.Parameter(torch.randn(1, num_future_frames, hidden_size) * 0.02)
         self.action_pos_emb = nn.Parameter(torch.randn(1, num_future_frames, hidden_size) * 0.02)
 
         self.blocks = nn.ModuleList([
-            Block(hidden_size, num_heads, num_sources=3, mlp_ratio=mlp_ratio, use_adaln=False, sa_first=False)
+            Block(hidden_size, num_heads, num_sources=4, mlp_ratio=mlp_ratio, use_adaln=False, sa_first=False)
             for _ in range(depth)
         ])
         self.norm     = nn.LayerNorm(hidden_size, eps=1e-6)
         self.out_proj = nn.Linear(hidden_size, action_dim)
 
-        self.register_buffer('cur_t_ids', self._t_ids(0,               num_past_frames,   patch_h, patch_w), persistent=False)
-        self.register_buffer('cur_h_ids', self._h_ids(num_past_frames,                    patch_h, patch_w), persistent=False)
-        self.register_buffer('cur_w_ids', self._w_ids(num_past_frames,                    patch_h, patch_w), persistent=False)
-        self.register_buffer('fut_t_ids', self._t_ids(num_past_frames, num_future_frames,  patch_h, patch_w), persistent=False)
-        self.register_buffer('fut_h_ids', self._h_ids(num_future_frames,                   patch_h, patch_w), persistent=False)
-        self.register_buffer('fut_w_ids', self._w_ids(num_future_frames,                   patch_h, patch_w), persistent=False)
+        self.register_buffer('past_t_ids', self._t_ids(0,               num_past_frames,   patch_h, patch_w), persistent=False)
+        self.register_buffer('past_h_ids', self._h_ids(num_past_frames,                    patch_h, patch_w), persistent=False)
+        self.register_buffer('past_w_ids', self._w_ids(num_past_frames,                    patch_h, patch_w), persistent=False)
+        self.register_buffer('fut_t_ids',  self._t_ids(num_past_frames, num_future_frames,  patch_h, patch_w), persistent=False)
+        self.register_buffer('fut_h_ids',  self._h_ids(num_future_frames,                   patch_h, patch_w), persistent=False)
+        self.register_buffer('fut_w_ids',  self._w_ids(num_future_frames,                   patch_h, patch_w), persistent=False)
 
         self._init_weights()
 
@@ -84,23 +90,41 @@ class IDM(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-    def forward(self, current_frames, future_frames, state):
-        B = current_frames.shape[0]
+    def forward(self, past_frames, future_frames, state=None, aux_frames=None):
+        """
+        past_frames:  (B, T*H*W, in_dim)        main camera — always required
+        future_frames: (B, K*H*W, in_dim)        main camera predicted future — always required
+        state:         (B, state_dim)|None
+        aux_frames:    (B, C*T*H*W, in_dim)|None auxiliary cameras (not predicted)
+        """
+        B = past_frames.shape[0]
 
-        current     = self.current_proj(current_frames)
+        past        = self.past_proj(past_frames)
         future      = self.future_proj(future_frames)
-        state_token = self.state_proj(state).unsqueeze(1)
+        state_token = self.state_proj(state).unsqueeze(1) if state is not None else None
 
-        cur_pos = (self.cur_t_ids, self.cur_h_ids, self.cur_w_ids)
-        fut_pos = (self.fut_t_ids, self.fut_h_ids, self.fut_w_ids)
+        past_pos = (self.past_t_ids, self.past_h_ids, self.past_w_ids)
+        fut_pos  = (self.fut_t_ids,  self.fut_h_ids,  self.fut_w_ids)
+
+        if aux_frames is not None:
+            num_aux = aux_frames.shape[1] // (self.num_past_frames * self.patch_h * self.patch_w)
+            aux = self.aux_proj(aux_frames)
+            aux_pos = (
+                self.past_t_ids.repeat(num_aux),
+                self.past_h_ids.repeat(num_aux),
+                self.past_w_ids.repeat(num_aux),
+            )
+        else:
+            aux     = None
+            aux_pos = None
 
         q = self.action_queries.expand(B, -1, -1) + self.action_pos_emb
 
         for block in self.blocks:
             q = block(
                 q,
-                sources=[current, future, state_token],
-                source_positions=[cur_pos, fut_pos, None],
+                sources=[past, future, state_token, aux],
+                source_positions=[past_pos, fut_pos, None, aux_pos],
                 cond=None,
                 q_pos=None,
             )

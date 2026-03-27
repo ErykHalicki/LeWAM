@@ -5,16 +5,17 @@
 #
 # Architecture: Flow Matching Transformer for video world modelling.
 #
-# DiT forward(x, t, past_frames, l, state, l_mask):
-#   x           (B, K*H*W, in_dim)   noisy future VJEPA2 patch embeddings
-#   t           (B,)                 flow matching timestep in [0, 1]
-#   past_frames (B, T*H*W, in_dim)   clean past/current frame patch embeddings
-#   l           (B, S, lang_dim)     pre-computed frozen language token embeddings
-#   state       (B, state_dim)       proprioceptive state vector
-#   l_mask      (B, S)               key padding mask for language (True = ignore)
-#   → returns   (B, K*H*W, in_dim)   predicted velocity field (x1 - x0)
+# DiT forward(x, t, past_frames, l, state, aux_frames, l_mask):
+#   x           (B, K*H*W, in_dim)              noisy future VJEPA2 patch embeddings
+#   t           (B,)                            flow matching timestep in [0, 1]
+#   past_frames (B, T*H*W, in_dim)              clean past/current frame patch embeddings (main camera)
+#   l           (B, S, lang_dim)                pre-computed frozen language token embeddings
+#   state       (B, state_dim)                  proprioceptive state vector
+#   aux_frames  (B, num_aux*T*H*W, in_dim)|None auxiliary camera past frames (not predicted)
+#   l_mask      (B, S)                          key padding mask for language (True = ignore)
+#   → returns   (B, K*H*W, in_dim)              predicted velocity field (x1 - x0)
 #
-# Each Block: SA (3D RoPE, adaLN-Zero) → CA (past_frames+RoPE, language, state) → MLP (adaLN-Zero)
+# Each Block: SA (3D RoPE, adaLN-Zero) → CA (past_frames+RoPE, language, state, aux_frames+RoPE) → MLP (adaLN-Zero)
 # Flow matching loss (not in this file): MSE(v_pred, x1 - x0)
 #   where x_t = (1 - t) * x0 + t * x1, x0 ~ N(0, I)
 # --------------------------------------------------------
@@ -76,7 +77,8 @@ class DiT(nn.Module):
 
     x:           (B, K*H*W, in_dim)
     t:           (B,)
-    past_frames: (B, T*H*W, in_dim)
+    past_frames: (B, T*H*W, in_dim)        main camera
+    aux_frames:  (B, C*T*H*W, in_dim)|None auxiliary cameras (C cameras, not predicted)
     l:           (B, S, lang_dim)
     state:       (B, state_dim)
     """
@@ -93,22 +95,23 @@ class DiT(nn.Module):
         mlp_ratio=4.0,
         lang_dim=512,
         state_dim=64,
-        language_dropout_prob=0.15,
-        state_dropout_prob=0.15,
     ):
         super().__init__()
         self.in_dim = in_dim
-        self.language_dropout_prob = language_dropout_prob
-        self.state_dropout_prob = state_dropout_prob
+        self.hidden_size = hidden_size
+        self.num_past_frames = num_past_frames
+        self.patch_h = patch_h
+        self.patch_w = patch_w
 
         self.x_embedder   = nn.Linear(in_dim, hidden_size)
         self.t_embedder   = TimestepEmbedder(hidden_size)
         self.context_proj = nn.Linear(in_dim, hidden_size)
+        self.aux_proj     = make_mlp(in_dim, hidden_size, hidden_size)
         self.lang_proj    = make_mlp(lang_dim, hidden_size, hidden_size)
         self.state_proj   = nn.Linear(state_dim, hidden_size)
 
         self.blocks = nn.ModuleList([
-            Block(hidden_size, num_heads, num_sources=3, mlp_ratio=mlp_ratio, use_adaln=True)
+            Block(hidden_size, num_heads, num_sources=4, mlp_ratio=mlp_ratio, use_adaln=True)
             for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, in_dim)
@@ -155,37 +158,43 @@ class DiT(nn.Module):
         nn.init.zeros_(self.final_layer.linear.weight)
         nn.init.zeros_(self.final_layer.linear.bias)
 
-    def forward(self, x, t, past_frames, l, state, l_mask=None):
+    def forward(self, x, t, past_frames, l=None, state=None, aux_frames=None, l_mask=None):
         """
         x:           (B, K*H*W, in_dim)
         t:           (B,)
-        past_frames: (B, T*H*W, in_dim)
-        l:           (B, S, lang_dim)
-        state:       (B, state_dim)
+        past_frames: (B, T*H*W, in_dim)        main camera — always required
+        l:           (B, S, lang_dim)|None
+        state:       (B, state_dim)|None
+        aux_frames:  (B, C*T*H*W, in_dim)|None auxiliary cameras (not predicted)
         l_mask:      (B, S) True = ignore
         """
-        if self.training and self.language_dropout_prob > 0:
-            drop = torch.rand(l.shape[0], device=l.device) < self.language_dropout_prob
-            l = l.masked_fill(drop.view(-1, 1, 1), 0.0)
-        if self.training and self.state_dropout_prob > 0:
-            drop = torch.rand(state.shape[0], device=state.device) < self.state_dropout_prob
-            state = state.masked_fill(drop.unsqueeze(1), 0.0)
-
         x           = self.x_embedder(x)
         past_frames = self.context_proj(past_frames)
-        l           = self.lang_proj(l)
-        state_token = self.state_proj(state).unsqueeze(1)
+        l           = self.lang_proj(l)           if l           is not None else None
+        state_token = self.state_proj(state).unsqueeze(1) if state is not None else None
         t_emb       = self.t_embedder(t)
 
         x_pos  = (self.future_t_ids, self.future_h_ids, self.future_w_ids)
         pf_pos = (self.past_t_ids,   self.past_h_ids,   self.past_w_ids)
 
+        if aux_frames is not None:
+            num_aux = aux_frames.shape[1] // (self.num_past_frames * self.patch_h * self.patch_w)
+            aux = self.aux_proj(aux_frames)
+            aux_pos = (
+                self.past_t_ids.repeat(num_aux),
+                self.past_h_ids.repeat(num_aux),
+                self.past_w_ids.repeat(num_aux),
+            )
+        else:
+            aux     = None
+            aux_pos = None
+
         for block in self.blocks:
             x = block(
                 x,
-                sources=[past_frames, l, state_token],
-                source_positions=[pf_pos, None, None],
-                source_masks=[None, l_mask, None],
+                sources=[past_frames, l, state_token, aux],
+                source_positions=[pf_pos, None, None, aux_pos],
+                source_masks=[None, l_mask, None, None],
                 cond=t_emb,
                 q_pos=x_pos,
             )
