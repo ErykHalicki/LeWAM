@@ -1,20 +1,6 @@
 #!/bin/bash
-|| true
-set -e
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-git clone --recurse-submodules https://github.com/ErykHalicki/LeWAM.git
+git clone --recurse-submodules https://github.com/ErykHalicki/LeWAM
 cd LeWAM
-uv venv .venv
-source .venv/bin/activate
+./src/wam/scripts/init/install_and_test.sh
 
-mkdir -p weights
-curl -L -o weights/vjepa2_1_vitb_dist_vitG_384.pt \
-    https://dl.fbaipublicfiles.com/vjepa2/vjepa2_1_vitb_dist_vitG_384.pt
-
-uv tool install hf
-hf download google/t5gemma-s-s-prefixlm --local-dir ./weights/t5gemma-s-s-prefixlm
-
-uv pip install .
-python src/wam/scripts/training/train.py
-exit 0
+# This script can be run using slurm or similar

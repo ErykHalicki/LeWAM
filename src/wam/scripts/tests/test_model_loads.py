@@ -19,3 +19,5 @@ print(f"Unfrozen vision, frozen language: {count_params(model)}M")
 model.language_encoder.set_frozen(False)
 print(f"Unfrozen vision and language: {count_params(model)}M")
 
+print("Everything works!")
+
