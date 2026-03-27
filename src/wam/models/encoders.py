@@ -139,7 +139,7 @@ def load_vjepa2_encoder(checkpoint_path: str, crop_size: int = 384) -> "VJEPA2Vi
         img_temporal_dim_size=1,
         interpolate_rope=True,
     )
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     sd = {
         k.replace("module.", "").replace("backbone.", ""): v
         for k, v in ckpt["ema_encoder"].items()
