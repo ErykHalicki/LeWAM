@@ -220,3 +220,6 @@ weights/
 *.run.xml
 *.synctex.gz
 *.pdf
+
+data/
+runs/

@@ -5,6 +5,42 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def make_patch_ids(t_start, num_frames, H, W, fps):
+    t_ids = (torch.arange(t_start, t_start + num_frames).float() / fps).repeat_interleave(H * W)
+    h_ids = torch.arange(H).repeat_interleave(W).repeat(num_frames)
+    w_ids = torch.arange(W).repeat(H * num_frames)
+    return t_ids, h_ids, w_ids
+
+
+class PatchPositionIds(nn.Module):
+    """
+    Holds 3D RoPE position ids (t, h, w) for a fixed spatiotemporal grid.
+    fps can be updated at runtime via set_fps() without re-creating the module.
+
+    pos property returns (t_ids, h_ids, w_ids) tuple for use in RoPE.
+    """
+    def __init__(self, t_start, num_frames, H, W, fps):
+        super().__init__()
+        self._t_start = t_start
+        self._num_frames = num_frames
+        self._H = H
+        self._W = W
+        t_ids, h_ids, w_ids = make_patch_ids(t_start, num_frames, H, W, fps)
+        self.register_buffer('t_ids', t_ids, persistent=False)
+        self.register_buffer('h_ids', h_ids, persistent=False)
+        self.register_buffer('w_ids', w_ids, persistent=False)
+
+    def set_fps(self, fps: float):
+        t_ids, h_ids, w_ids = make_patch_ids(self._t_start, self._num_frames, self._H, self._W, fps)
+        self.t_ids = t_ids.to(self.t_ids.device)
+        self.h_ids = h_ids.to(self.h_ids.device)
+        self.w_ids = w_ids.to(self.w_ids.device)
+
+    @property
+    def pos(self):
+        return (self.t_ids, self.h_ids, self.w_ids)
+
+
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
@@ -164,7 +200,7 @@ class Block(nn.Module):
     q_pos passed to forward controls whether queries get 3D RoPE in SA and CA.
     source_positions controls 3D RoPE on each source's K/V in CA.
     """
-    def __init__(self, hidden_size, num_heads, num_sources, mlp_ratio=4.0, use_adaln=True, sa_first=True):
+    def __init__(self, hidden_size, num_heads, num_sources, mlp_ratio=4.0, use_adaln=True, sa_first=True, dropout=0.0):
         super().__init__()
         self.use_adaln = use_adaln
         self.rope = RoPE3D(hidden_size // num_heads)
@@ -178,6 +214,7 @@ class Block(nn.Module):
 
         self.norm2    = nn.LayerNorm(hidden_size, elementwise_affine=affine, eps=1e-6)
         self.mlp      = make_mlp(hidden_size, int(hidden_size * mlp_ratio), hidden_size)
+        self.drop     = nn.Dropout(dropout)
         self.sa_first = sa_first
 
         if use_adaln:
@@ -189,16 +226,24 @@ class Block(nn.Module):
 
     def _run_sa(self, x, shift=None, scale=None, gate=None, q_pos=None):
         h = modulate(self.norm1(x), shift, scale) if self.use_adaln else self.norm1(x)
-        out = self.sa(h, rope=self.rope if q_pos is not None else None, pos=q_pos)
-        return x + (gate.unsqueeze(1) * out if self.use_adaln else out)
+        out = self.drop(self.sa(h, rope=self.rope if q_pos is not None else None, pos=q_pos))
+        if self.use_adaln:
+            assert gate is not None
+            return x + gate.unsqueeze(1) * out
+        return x + out
 
     def _run_ca(self, x, sources, source_positions, source_masks, q_pos):
-        return x + self.ca(self.norm_ca(x), sources, rope=self.rope, q_pos=q_pos,
-                           source_positions=source_positions, source_masks=source_masks)
+        out = self.drop(self.ca(self.norm_ca(x), sources, rope=self.rope, q_pos=q_pos,
+                                source_positions=source_positions, source_masks=source_masks))
+        return x + out
 
     def _run_mlp(self, x, shift=None, scale=None, gate=None):
         h = modulate(self.norm2(x), shift, scale) if self.use_adaln else self.norm2(x)
-        return x + (gate.unsqueeze(1) * self.mlp(h) if self.use_adaln else self.mlp(h))
+        out = self.drop(self.mlp(h))
+        if self.use_adaln:
+            assert gate is not None
+            return x + gate.unsqueeze(1) * out
+        return x + out
 
     def forward(self, x, sources, source_positions=None, source_masks=None, cond=None, q_pos=None):
         """

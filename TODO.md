@@ -2,12 +2,21 @@
 ## Implementation
 
 - create training loop
+    - add optimizer backprop and loss calculation (SIGReg, predloss)
+    - visualize predicted outputs vs true outputs ever X training steps and save figures
+        - add the training runs folder to gitignore
+    - check vram usage (maybe sysematically in pytorch instead of using nvidia-smi if possible?)
+
+- refactor LeWAM such that encoding does not need to be done outside the model (in the training loop) 
+    - maybe also add a function which will preprocess the frames as well, or add a frames_preprocessed=bool flag
+    - same with language, there shouldnt be a need to pass in preencoded langiage tokens unless you want to
+- fix IDM multi camera conditioning case. it should not have and aux field in cross attention. instead, it should just get passed all camera frames equally in both 
+past and future (just concat the embeddings into 2 long lists)
 - make the ground truth actions and patch embeddings are correctly synced
     - VJEPA2 pairs frames, so there are in_frames/2 output frames. Make sure that the relative actions account for this correctly
-- test final model parameter count, test feasibility of using 300M VJEPA2.1 checkpoint (ViT L instead of B)
-- find a well curated pre training dataset with language captions of videos if possible
 - create a decoder for visualizing predicted embeddings
     - can be trained on the embedding - image pairs from just the encoder, and then used to visualize predictor outputs
+
 - test trivial pretraining, overfitting on one video
     - use decoder to test if the predicted outputs make sense
     - can also compare PCA projections of prediced vs ground truth embeddings

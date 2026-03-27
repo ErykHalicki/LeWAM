@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,6 +7,10 @@ from PIL import Image
 
 from vjepa2.app.vjepa_2_1.models.vision_transformer import vit_base
 from wam.models.encoders import VJEPA2VideoPreprocessor
+
+le_wam_root = os.environ.get('LE_WAM_ROOT')
+if not le_wam_root:
+    raise ValueError("LE_WAM_ROOT environment variable not set")
 
 crop_size = 512
 processor = VJEPA2VideoPreprocessor(crop_size=crop_size)
@@ -24,12 +29,14 @@ model = vit_base(
     interpolate_rope=True,
 )
 
-state_dict = torch.load("weights/vjepa2_1_vitb_dist_vitG_384.pt", map_location="cpu")
+vjepa2_checkpoint = os.path.join(le_wam_root, 'weights/vjepa2_1_vitb_dist_vitG_384.pt')
+state_dict = torch.load(vjepa2_checkpoint, map_location="cpu")
 encoder_sd = {k.replace("module.", "").replace("backbone.", ""): v for k, v in state_dict["ema_encoder"].items()}
 model.load_state_dict(encoder_sd, strict=True)
 model.eval()
 
-img = Image.open('src/wam/scripts/tests/test.avif').convert('RGB')
+test_img_path = os.path.join(le_wam_root, 'src/wam/scripts/tests/test.avif')
+img = Image.open(test_img_path).convert('RGB')
 frame = torch.from_numpy(np.array(img)).permute(2, 0, 1)  # C x H x W
 raw_frames = frame.unsqueeze(0).repeat(8, 1, 1, 1)  # T x C x H x W
 

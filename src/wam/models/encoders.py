@@ -46,8 +46,8 @@ class VJEPA2VideoPreprocessor(nn.Module):
     Replicates the VJEPA2 eval-mode preprocessing pipeline without the VJEPA2 dependency.
 
     Pipeline:
-        1. Resize short side to int(crop_size * 256/224)
-        2. Center-crop to (crop_size, crop_size)
+        1. Resize short side to crop_size (upscales if needed, minimal crop)
+        2. Center-crop to (crop_size, crop_size) to handle non-square frames
         3. Scale uint8 [0, 255] → float [0, 1]
         4. ImageNet normalize
         5. Rearrange (B, T, C, H, W) → (B, C, T, H, W) for VJEPA2
@@ -58,15 +58,25 @@ class VJEPA2VideoPreprocessor(nn.Module):
     """
     def __init__(self, crop_size=224):
         super().__init__()
-        self.crop_size  = crop_size
-        self.short_side = int(crop_size * 256 / 224)
+        self.crop_size = crop_size
         self.register_buffer('mean', torch.tensor(_IMAGENET_MEAN).view(3, 1, 1, 1))
         self.register_buffer('std',  torch.tensor(_IMAGENET_STD).view(3, 1, 1, 1))
+
+    def unnormalize(self, frames):
+        """
+        Invert ImageNet normalization.
+
+        frames: (..., C, H, W)  ImageNet-normalized float
+        → (..., C, H, W)  float in [0, 1]
+        """
+        mean = self.mean.view(3, 1, 1)
+        std  = self.std.view(3, 1, 1)
+        return (frames * std + mean).clamp(0, 1)
 
     def forward(self, frames):
         B, T, C, H, W = frames.shape
         x = frames.view(B * T, C, H, W).float()
-        x = TF.resize(x, self.short_side, antialias=True)
+        x = TF.resize(x, self.crop_size, antialias=True)
         x = TF.center_crop(x, self.crop_size)
         x = x / 255.0
         x = x.view(B, T, C, self.crop_size, self.crop_size)
@@ -77,10 +87,14 @@ class VJEPA2VideoPreprocessor(nn.Module):
 
 class VJEPA2VideoEncoder(VideoEncoder):
     """
-    VJEPA2 video encoder. Preprocessing is handled internally.
+    VJEPA2 video encoder.
+
+    preprocess(frames):
+        frames: (T, C, H, W) or (B, T, C, H, W)  uint8 or float in [0, 255]
+        → (C, T, H, W) or (B, C, T, H, W)  float, ImageNet-normalized
 
     forward(frames):
-        frames: (B, T, C, H, W)  uint8 or float in [0, 255]
+        frames: (B, C, T, H, W)  already preprocessed
         → (B, T*H*W, D)
     """
     def __init__(self, backbone, crop_size=224):
@@ -88,9 +102,15 @@ class VJEPA2VideoEncoder(VideoEncoder):
         self.backbone     = backbone
         self.preprocessor = VJEPA2VideoPreprocessor(crop_size)
 
+    def preprocess(self, frames):
+        batched = frames.ndim == 5
+        if not batched:
+            frames = frames.unsqueeze(0)
+        out = self.preprocessor(frames)
+        return out if batched else out.squeeze(0)
+
     def forward(self, frames):
-        video = self.preprocessor(frames)   # (B, C, T, H, W)
-        return self.backbone(video)
+        return self.backbone(frames)
 
 
 class GemmaLanguageEncoder(LanguageEncoder):
@@ -101,11 +121,10 @@ class GemmaLanguageEncoder(LanguageEncoder):
         texts: list[str]
         → embeddings (B, S, D), key_padding_mask (B, S) where True = ignore
     """
-    def __init__(self, backbone, model_id: str):
+    def __init__(self, backbone, tokenizer):
         super().__init__()
-        from transformers import AutoTokenizer
         self.backbone  = backbone
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.tokenizer = tokenizer
         self.set_frozen(True)
 
     def forward(self, texts):
@@ -147,7 +166,7 @@ def load_vjepa2_encoder(checkpoint_path: str, crop_size: int = 384) -> "VJEPA2Vi
     backbone.load_state_dict(sd, strict=True)
     backbone.eval()
     enc = VJEPA2VideoEncoder(backbone, crop_size=crop_size)
-    enc.set_frozen(False)
+    enc.set_frozen(True)
     return enc
 
 
@@ -166,7 +185,7 @@ def load_t5gemma_encoder(
     → GemmaLanguageEncoder (frozen by default)
     """
     import torch
-    from transformers import T5GemmaEncoderModel
+    from transformers import T5GemmaEncoderModel, AutoTokenizer
 
     if torch_dtype is None:
         torch_dtype = torch.bfloat16
@@ -177,8 +196,9 @@ def load_t5gemma_encoder(
         device_map=device_map,
         is_encoder_decoder=False, # im not sure why this works
     )
-    backbone.eval()
-    enc = GemmaLanguageEncoder(backbone, model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id if path is None else path)
+    enc = GemmaLanguageEncoder(backbone, tokenizer)
+    enc.eval()
     enc.set_frozen(True)
     return enc
 

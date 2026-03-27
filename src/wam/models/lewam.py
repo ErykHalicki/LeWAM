@@ -1,5 +1,7 @@
 import torch.nn as nn
 
+VERSION = "v0.1"
+
 from wam.models.DiT import DiT_models
 from wam.models.IDM import IDM_models
 from wam.models.encoders import StateEncoder, ActionDecoder, load_vjepa2_encoder, load_t5gemma_encoder
@@ -30,17 +32,27 @@ class LeWAM(nn.Module):
         self.idm              = idm
         self.action_decoder   = action_decoder
 
+    def count_params(self, millions=True):
+        n = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return round(n * (1e-6 if millions else 1), ndigits=0)
+
+    def set_fps(self, fps: float):
+        if self.dit is not None:
+            self.dit.set_fps(fps)
+        if self.idm is not None:
+            self.idm.set_fps(fps)
+
     def encode_video(self, video):
         """video: (B, C, T, H, W) → (B, T*H*W, D)"""
         assert self.video_encoder is not None, "No video encoder attached"
         return self.video_encoder(video)
 
-    def encode_language(self, input_ids, attention_mask=None):
+    def encode_language(self, texts):
         """→ embeddings (B, S, D), key_padding_mask (B, S)"""
         assert self.language_encoder is not None, "No language encoder attached"
-        return self.language_encoder(input_ids, attention_mask)
+        return self.language_encoder(texts)
 
-    def predict_future(self, x_t, t, past_frames, state, lang=None, aux_frames=None, l_mask=None):
+    def predict_future(self, x_t, t, past_frames, state=None, lang=None, aux_frames=None, l_mask=None):
         """
         DiT forward for world model training.
 
@@ -53,7 +65,10 @@ class LeWAM(nn.Module):
         l_mask:      (B, S) True=ignore
         → (B, K*H*W, in_dim)  predicted velocity field
         """
-        state_emb = self.state_encoder(state)
+        if state is not None:
+            state_emb = self.state_encoder(state)
+        else:
+            state_emb = None
         return self.dit(x_t, t, past_frames, lang, state_emb, aux_frames, l_mask)
 
     def infer_actions(self, past_frames, future_frames, state, aux_frames=None):
@@ -82,10 +97,10 @@ class LeWAM(nn.Module):
 
 
 def build_lewam(
+    num_past_frames=6,
+    num_future_frames=6,
     video_encoder=None,
     language_encoder=None,
-    num_past_frames=15, # 1 second of context
-    num_future_frames=15, # 1 second of prediction
     patch_h=24,
     patch_w=24,
     in_dim=768,
@@ -94,39 +109,50 @@ def build_lewam(
     state_enc_dim=128,
     action_dim=7,
     action_latent_dim=64,
+    fps=30.0,
     dit_size='B',
     idm_size='B',
 ):
     """
     Build a full LeWAM model.
 
+    num_past_frames: number of frames to condition on
+    num_future_frames: number of frames to predict
+
     video_encoder:    a VideoEncoder subclass instance (e.g. VJEPA2VideoEncoder), or None
     language_encoder: a LanguageEncoder subclass instance (e.g. GemmaLanguageEncoder), or None
                       (pass None when using pre-computed language embeddings)
-    dit_size / idm_size: one of 'XL', 'L', 'B', 'S', 'Baby'
+    dit_size / idm_size: one of 'XL', 'L', 'B', 'S', 'Baby', or None to omit
     """
-    state_encoder  = StateEncoder(raw_state_dim, state_enc_dim * 2, state_enc_dim)
-    action_decoder = ActionDecoder(action_latent_dim, action_latent_dim * 2, action_dim)
+    dit = None
+    if dit_size is not None:
+        dit = DiT_models[f'DiT-{dit_size}'](
+            num_frames=num_future_frames,
+            num_past_frames=num_past_frames,
+            patch_h=patch_h,
+            patch_w=patch_w,
+            fps=fps,
+            in_dim=in_dim,
+            lang_dim=lang_dim,
+            state_dim=state_enc_dim,
+        )
 
-    dit = DiT_models[f'DiT-{dit_size}'](
-        num_frames=num_future_frames,
-        num_past_frames=num_past_frames,
-        patch_h=patch_h,
-        patch_w=patch_w,
-        in_dim=in_dim,
-        lang_dim=lang_dim,
-        state_dim=state_enc_dim,
-    )
-
-    idm = IDM_models[f'IDM-{idm_size}'](
-        num_past_frames=num_past_frames,
-        num_future_frames=num_future_frames,
-        patch_h=patch_h,
-        patch_w=patch_w,
-        in_dim=in_dim,
-        state_dim=state_enc_dim,
-        action_latent_dim=action_latent_dim,
-    )
+    state_encoder = None
+    idm = None
+    action_decoder = None
+    if idm_size is not None:
+        state_encoder  = StateEncoder(raw_state_dim, state_enc_dim * 2, state_enc_dim)
+        idm = IDM_models[f'IDM-{idm_size}'](
+            num_past_frames=num_past_frames,
+            num_future_frames=num_future_frames,
+            patch_h=patch_h,
+            patch_w=patch_w,
+            fps=fps,
+            in_dim=in_dim,
+            state_dim=state_enc_dim,
+            action_latent_dim=action_latent_dim,
+        )
+        action_decoder = ActionDecoder(action_latent_dim, action_latent_dim * 2, action_dim)
 
     return LeWAM(
         video_encoder=video_encoder,
@@ -140,10 +166,11 @@ def build_lewam(
 
 def build_lewam_with_encoders(
     vjepa2_checkpoint: str,
-    t5gemma_checkpoint: str = None,
+    t5gemma_checkpoint: str | None = None,
     t5gemma_model_id: str = "google/t5gemma-s-s-prefixlm",
     crop_size: int = 384,
     t5gemma_device_map: str = "auto",
+    load_language_encoder: bool = True,
     **kwargs,
 ) -> LeWAM:
     """
@@ -158,5 +185,7 @@ def build_lewam_with_encoders(
     Both encoders are frozen by default.
     """
     video_enc = load_vjepa2_encoder(vjepa2_checkpoint, crop_size=crop_size)
-    lang_enc  = load_t5gemma_encoder(t5gemma_model_id, path=t5gemma_checkpoint, device_map=t5gemma_device_map)
+    lang_enc  = None
+    if load_language_encoder:
+        lang_enc = load_t5gemma_encoder(t5gemma_model_id, path=t5gemma_checkpoint, device_map=t5gemma_device_map)
     return build_lewam(video_encoder=video_enc, language_encoder=lang_enc, **kwargs)

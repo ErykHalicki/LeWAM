@@ -15,7 +15,7 @@
 import torch
 import torch.nn as nn
 
-from wam.models.common import Block, make_mlp
+from wam.models.common import Block, make_mlp, PatchPositionIds
 
 
 class IDM(nn.Module):
@@ -37,6 +37,7 @@ class IDM(nn.Module):
         num_future_frames,
         patch_h,
         patch_w,
+        fps=30.0,
         in_dim=768,
         hidden_size=768,
         depth=6,
@@ -64,26 +65,14 @@ class IDM(nn.Module):
         self.norm     = nn.LayerNorm(hidden_size, eps=1e-6)
         self.out_proj = nn.Linear(hidden_size, action_latent_dim)
 
-        self.register_buffer('past_t_ids', self._t_ids(0,               num_past_frames,   patch_h, patch_w), persistent=False)
-        self.register_buffer('past_h_ids', self._h_ids(num_past_frames,                    patch_h, patch_w), persistent=False)
-        self.register_buffer('past_w_ids', self._w_ids(num_past_frames,                    patch_h, patch_w), persistent=False)
-        self.register_buffer('fut_t_ids',  self._t_ids(num_past_frames, num_future_frames,  patch_h, patch_w), persistent=False)
-        self.register_buffer('fut_h_ids',  self._h_ids(num_future_frames,                   patch_h, patch_w), persistent=False)
-        self.register_buffer('fut_w_ids',  self._w_ids(num_future_frames,                   patch_h, patch_w), persistent=False)
+        self.past_pos   = PatchPositionIds(0, num_past_frames, patch_h, patch_w, fps)
+        self.future_pos = PatchPositionIds(num_past_frames, num_future_frames, patch_h, patch_w, fps)
 
         self._init_weights()
 
-    @staticmethod
-    def _t_ids(t_start, num_frames, H, W):
-        return torch.arange(t_start, t_start + num_frames).repeat_interleave(H * W)
-
-    @staticmethod
-    def _h_ids(num_frames, H, W):
-        return torch.arange(H).repeat_interleave(W).repeat(num_frames)
-
-    @staticmethod
-    def _w_ids(num_frames, H, W):
-        return torch.arange(W).repeat(H * num_frames)
+    def set_fps(self, fps: float):
+        self.past_pos.set_fps(fps)
+        self.future_pos.set_fps(fps)
 
     def _init_weights(self):
         for m in self.modules():
@@ -105,17 +94,14 @@ class IDM(nn.Module):
         future      = self.future_proj(future_frames)
         state_token = self.state_proj(state).unsqueeze(1) if state is not None else None
 
-        past_pos = (self.past_t_ids, self.past_h_ids, self.past_w_ids)
-        fut_pos  = (self.fut_t_ids,  self.fut_h_ids,  self.fut_w_ids)
+        past_pos = self.past_pos.pos
+        fut_pos  = self.future_pos.pos
 
         if aux_frames is not None:
             num_aux = aux_frames.shape[1] // (self.num_past_frames * self.patch_h * self.patch_w)
             aux = self.aux_proj(aux_frames)
-            aux_pos = (
-                self.past_t_ids.repeat(num_aux),
-                self.past_h_ids.repeat(num_aux),
-                self.past_w_ids.repeat(num_aux),
-            )
+            t, h, w = self.past_pos.pos
+            aux_pos = (t.repeat(num_aux), h.repeat(num_aux), w.repeat(num_aux))
         else:
             aux     = None
             aux_pos = None
@@ -125,7 +111,7 @@ class IDM(nn.Module):
         for block in self.blocks:
             q = block(
                 q,
-                sources=[past, future, state_token, aux],
+                sources=[past, future, state_token, aux], #TODO THIS NEEDS TO BE FIXED, ALL FRAMES SHOULD BE TREATED EQUALLY FOR ACTION PREDICTION
                 source_positions=[past_pos, fut_pos, None, aux_pos],
                 cond=None,
                 q_pos=None,
