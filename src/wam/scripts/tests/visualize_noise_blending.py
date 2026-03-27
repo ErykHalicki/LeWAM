@@ -1,8 +1,14 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 
-img = Image.open("src/wam/scripts/tests/test.avif").convert("RGB")
+le_wam_root = os.environ.get('LE_WAM_ROOT')
+if not le_wam_root:
+    raise ValueError("LE_WAM_ROOT environment variable not set")
+
+test_img_path = os.path.join(le_wam_root, 'src/wam/scripts/tests/test.avif')
+img = Image.open(test_img_path).convert("RGB")
 x0 = np.array(img).astype(np.float32) / 255.0
 
 x1 = np.random.randn(*x0.shape).astype(np.float32)

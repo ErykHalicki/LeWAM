@@ -25,7 +25,7 @@ import math
 import torch
 import torch.nn as nn
 
-from wam.models.common import Block, modulate, make_mlp
+from wam.models.common import Block, modulate, make_mlp, PatchPositionIds
 
 
 class TimestepEmbedder(nn.Module):
@@ -88,6 +88,7 @@ class DiT(nn.Module):
         num_past_frames,
         patch_h,
         patch_w,
+        fps=30.0,
         in_dim=768,
         hidden_size=768,
         depth=12,
@@ -116,26 +117,14 @@ class DiT(nn.Module):
         ])
         self.final_layer = FinalLayer(hidden_size, in_dim)
 
-        self.register_buffer('future_t_ids', self._t_ids(num_past_frames, num_frames, patch_h, patch_w), persistent=False)
-        self.register_buffer('future_h_ids', self._h_ids(num_frames, patch_h, patch_w),                  persistent=False)
-        self.register_buffer('future_w_ids', self._w_ids(num_frames, patch_h, patch_w),                  persistent=False)
-        self.register_buffer('past_t_ids',   self._t_ids(0, num_past_frames, patch_h, patch_w),          persistent=False)
-        self.register_buffer('past_h_ids',   self._h_ids(num_past_frames, patch_h, patch_w),             persistent=False)
-        self.register_buffer('past_w_ids',   self._w_ids(num_past_frames, patch_h, patch_w),             persistent=False)
+        self.future_pos = PatchPositionIds(num_past_frames, num_frames, patch_h, patch_w, fps)
+        self.past_pos   = PatchPositionIds(0, num_past_frames, patch_h, patch_w, fps)
 
         self.initialize_weights()
 
-    @staticmethod
-    def _t_ids(t_start, num_frames, H, W):
-        return torch.arange(t_start, t_start + num_frames).repeat_interleave(H * W)
-
-    @staticmethod
-    def _h_ids(num_frames, H, W):
-        return torch.arange(H).repeat_interleave(W).repeat(num_frames)
-
-    @staticmethod
-    def _w_ids(num_frames, H, W):
-        return torch.arange(W).repeat(H * num_frames)
+    def set_fps(self, fps: float):
+        self.future_pos.set_fps(fps)
+        self.past_pos.set_fps(fps)
 
     def initialize_weights(self):
         def _basic_init(module):
@@ -174,17 +163,14 @@ class DiT(nn.Module):
         state_token = self.state_proj(state).unsqueeze(1) if state is not None else None
         t_emb       = self.t_embedder(t)
 
-        x_pos  = (self.future_t_ids, self.future_h_ids, self.future_w_ids)
-        pf_pos = (self.past_t_ids,   self.past_h_ids,   self.past_w_ids)
+        x_pos  = self.future_pos.pos
+        pf_pos = self.past_pos.pos
 
         if aux_frames is not None:
             num_aux = aux_frames.shape[1] // (self.num_past_frames * self.patch_h * self.patch_w)
             aux = self.aux_proj(aux_frames)
-            aux_pos = (
-                self.past_t_ids.repeat(num_aux),
-                self.past_h_ids.repeat(num_aux),
-                self.past_w_ids.repeat(num_aux),
-            )
+            t, h, w = self.past_pos.pos
+            aux_pos = (t.repeat(num_aux), h.repeat(num_aux), w.repeat(num_aux))
         else:
             aux     = None
             aux_pos = None

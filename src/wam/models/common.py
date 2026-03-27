@@ -5,6 +5,42 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def make_patch_ids(t_start, num_frames, H, W, fps):
+    t_ids = (torch.arange(t_start, t_start + num_frames).float() / fps).repeat_interleave(H * W)
+    h_ids = torch.arange(H).repeat_interleave(W).repeat(num_frames)
+    w_ids = torch.arange(W).repeat(H * num_frames)
+    return t_ids, h_ids, w_ids
+
+
+class PatchPositionIds(nn.Module):
+    """
+    Holds 3D RoPE position ids (t, h, w) for a fixed spatiotemporal grid.
+    fps can be updated at runtime via set_fps() without re-creating the module.
+
+    pos property returns (t_ids, h_ids, w_ids) tuple for use in RoPE.
+    """
+    def __init__(self, t_start, num_frames, H, W, fps):
+        super().__init__()
+        self._t_start = t_start
+        self._num_frames = num_frames
+        self._H = H
+        self._W = W
+        t_ids, h_ids, w_ids = make_patch_ids(t_start, num_frames, H, W, fps)
+        self.register_buffer('t_ids', t_ids, persistent=False)
+        self.register_buffer('h_ids', h_ids, persistent=False)
+        self.register_buffer('w_ids', w_ids, persistent=False)
+
+    def set_fps(self, fps: float):
+        t_ids, h_ids, w_ids = make_patch_ids(self._t_start, self._num_frames, self._H, self._W, fps)
+        self.t_ids = t_ids.to(self.t_ids.device)
+        self.h_ids = h_ids.to(self.h_ids.device)
+        self.w_ids = w_ids.to(self.w_ids.device)
+
+    @property
+    def pos(self):
+        return (self.t_ids, self.h_ids, self.w_ids)
+
+
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 

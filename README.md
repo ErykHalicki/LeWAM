@@ -50,7 +50,23 @@ LeWAM/
 ## Setup
 
 ```bash
+export HF_TOKEN={YOUR_TOKEN} # this is needed to be able to install the Gemmma encoder
+
 git clone --recurse-submodules https://github.com/ErykHalicki/LeWAM
 cd LeWAM
 ./src/wam/scripts/init/install_and_test.sh
 ```
+
+---
+
+## Environment Variables
+
+Add the following to your `~/.bashrc`:
+
+```bash
+export LE_WAM_ROOT=/path/to/LeWAM
+export HF_TOKEN=your_huggingface_token
+```
+
+- `LE_WAM_ROOT`: Used by dataset download scripts to determine where to place data files
+- `HF_TOKEN`: Required for downloading the Gemma encoder from HuggingFace
