@@ -13,25 +13,17 @@ cd "$DATASET_DIR"
 
 echo "Downloading Something-Something V2 dataset..."
 
-if [ ! -f "20bn-something-something-v2-00" ]; then
-    echo "Downloading part 00..."
-    curl -L -o 20bn-something-something-v2-00 \
-        "https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/dataset/AIDataset/Something-Something-V2/20bn-something-something-v2-00"
-else
-    echo "Part 00 already exists, skipping."
-fi
+echo "Downloading part 00 (resuming if partial)..."
+curl -L -C - --retry 5 --retry-delay 2 -o 20bn-something-something-v2-00 \
+    "https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/dataset/AIDataset/Something-Something-V2/20bn-something-something-v2-00"
 
-if [ ! -f "20bn-something-something-v2-01" ]; then
-    echo "Downloading part 01..."
-    curl -L -o 20bn-something-something-v2-01 \
-        "https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/dataset/AIDataset/Something-Something-V2/20bn-something-something-v2-01"
-else
-    echo "Part 01 already exists, skipping."
-fi
+echo "Downloading part 01 (resuming if partial)..."
+curl -L -C - --retry 5 --retry-delay 2 -o 20bn-something-something-v2-01 \
+    "https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/dataset/AIDataset/Something-Something-V2/20bn-something-something-v2-01"
 
 if [ ! -f "labels.zip" ]; then
     echo "Downloading labels..."
-    curl -L -o labels.zip \
+    curl -L -C - --retry 5 --retry-delay 2 -o labels.zip \
         "https://softwarecenter.qualcomm.com/api/download/software/dataset/AIDataset/Something-Something-V2/20bn-something-something-download-package-labels.zip"
 else
     echo "Labels already exist, skipping."

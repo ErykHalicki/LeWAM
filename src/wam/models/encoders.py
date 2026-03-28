@@ -62,6 +62,17 @@ class VJEPA2VideoPreprocessor(nn.Module):
         self.register_buffer('mean', torch.tensor(_IMAGENET_MEAN).view(3, 1, 1, 1))
         self.register_buffer('std',  torch.tensor(_IMAGENET_STD).view(3, 1, 1, 1))
 
+    def unnormalize(self, frames):
+        """
+        Invert ImageNet normalization.
+
+        frames: (..., C, H, W)  ImageNet-normalized float
+        → (..., C, H, W)  float in [0, 1]
+        """
+        mean = self.mean.view(3, 1, 1)
+        std  = self.std.view(3, 1, 1)
+        return (frames * std + mean).clamp(0, 1)
+
     def forward(self, frames):
         B, T, C, H, W = frames.shape
         x = frames.view(B * T, C, H, W).float()
@@ -121,7 +132,7 @@ class GemmaLanguageEncoder(LanguageEncoder):
         enc    = self.tokenizer(texts, return_tensors="pt", padding=True).to(device)
         out    = self.backbone(input_ids=enc.input_ids, attention_mask=enc.attention_mask)
         mask   = ~enc.attention_mask.bool()   # True = ignore
-        return out.last_hidden_state.type(torch.float16), mask
+        return out.last_hidden_state, mask
 
 
 def load_vjepa2_encoder(checkpoint_path: str, crop_size: int = 384) -> "VJEPA2VideoEncoder":

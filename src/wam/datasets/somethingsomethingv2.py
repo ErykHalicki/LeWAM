@@ -24,12 +24,15 @@ class SomethingSomethingV2Dataset(Dataset):
 
         if load_videos:
             self.tar_path = os.path.join(data_dir, '20bn-something-something-v2.tar')
-            self.tar = tarfile.open(self.tar_path, 'r')
-            self.video_dict = {
-                m.name.split('/')[-1].replace('.webm', ''): m
-                for m in self.tar.getmembers()
-                if m.name.endswith('.webm')
-            }
+            print("Indexing tar file...")
+            with tarfile.open(self.tar_path, 'r') as tf:
+                self.video_index = {
+                    m.name.split('/')[-1].replace('.webm', ''): (m.offset_data, m.size)
+                    for m in tf.getmembers()
+                    if m.name.endswith('.webm')
+                }
+            print(f"Indexed {len(self.video_index)} videos.")
+            self._tar_file = None
 
     def __len__(self):
         return len(self.annotations)
@@ -45,19 +48,26 @@ class SomethingSomethingV2Dataset(Dataset):
             'placeholders': annotation.get('placeholders', [])
         }
 
-        if self.load_videos and video_id in self.video_dict:
-            member = self.video_dict[video_id]
-            video_bytes = self.tar.extractfile(member).read()
+        if self.load_videos and video_id in self.video_index:
+            if self._tar_file is None:
+                self._tar_file = open(self.tar_path, 'rb')
+            offset, size = self.video_index[video_id]
+            self._tar_file.seek(offset)
+            video_bytes = self._tar_file.read(size)
 
-            container = av.open(io.BytesIO(video_bytes))
-            frames = [frame.to_ndarray(format='rgb24') for frame in container.decode(video=0)]
-            container.close()
+            try:
+                container = av.open(io.BytesIO(video_bytes))
+                frames = [frame.to_ndarray(format='rgb24') for frame in container.decode(video=0)]  # type: ignore[call-overload]
+                container.close()
+                video = torch.from_numpy(np.stack(frames))
+            except Exception:
+                return None
 
             if frames:
-                video = torch.from_numpy(np.stack(frames))  # (T, H, W, C)
                 if self.num_frames is not None:
                     if video.shape[0] < self.num_frames:
-                        return None
+                        pad = self.num_frames - video.shape[0]
+                        video = torch.cat([video, video[-1:].repeat(pad, 1, 1, 1)], dim=0)
                     indices = torch.linspace(0, video.shape[0] - 1, self.num_frames).long()
                     video = video[indices]
                 result['video'] = video.permute(0, 3, 1, 2)  # (T, C, H, W)

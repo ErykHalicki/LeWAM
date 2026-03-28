@@ -8,4 +8,3 @@ from wam.models.encoders import (
     load_vjepa2_encoder, load_t5gemma_encoder,
 )
 from wam.models.lewam import LeWAM, build_lewam, build_lewam_with_encoders
-from wam.models.losses import SIGReg

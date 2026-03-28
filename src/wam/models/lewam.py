@@ -1,5 +1,7 @@
 import torch.nn as nn
 
+VERSION = "v0.1"
+
 from wam.models.DiT import DiT_models
 from wam.models.IDM import IDM_models
 from wam.models.encoders import StateEncoder, ActionDecoder, load_vjepa2_encoder, load_t5gemma_encoder
@@ -30,9 +32,15 @@ class LeWAM(nn.Module):
         self.idm              = idm
         self.action_decoder   = action_decoder
 
+    def count_params(self, millions=True):
+        n = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return round(n * (1e-6 if millions else 1), ndigits=0)
+
     def set_fps(self, fps: float):
-        self.dit.set_fps(fps)
-        self.idm.set_fps(fps)
+        if self.dit is not None:
+            self.dit.set_fps(fps)
+        if self.idm is not None:
+            self.idm.set_fps(fps)
 
     def encode_video(self, video):
         """video: (B, C, T, H, W) → (B, T*H*W, D)"""
@@ -89,10 +97,10 @@ class LeWAM(nn.Module):
 
 
 def build_lewam(
-    num_past_frames, 
-    num_future_frames,
+    num_past_frames=6,
+    num_future_frames=6,
     video_encoder=None,
-    language_encoder=None, 
+    language_encoder=None,
     patch_h=24,
     patch_w=24,
     in_dim=768,
@@ -114,32 +122,37 @@ def build_lewam(
     video_encoder:    a VideoEncoder subclass instance (e.g. VJEPA2VideoEncoder), or None
     language_encoder: a LanguageEncoder subclass instance (e.g. GemmaLanguageEncoder), or None
                       (pass None when using pre-computed language embeddings)
-    dit_size / idm_size: one of 'XL', 'L', 'B', 'S', 'Baby'
+    dit_size / idm_size: one of 'XL', 'L', 'B', 'S', 'Baby', or None to omit
     """
-    state_encoder  = StateEncoder(raw_state_dim, state_enc_dim * 2, state_enc_dim)
-    action_decoder = ActionDecoder(action_latent_dim, action_latent_dim * 2, action_dim)
+    dit = None
+    if dit_size is not None:
+        dit = DiT_models[f'DiT-{dit_size}'](
+            num_frames=num_future_frames,
+            num_past_frames=num_past_frames,
+            patch_h=patch_h,
+            patch_w=patch_w,
+            fps=fps,
+            in_dim=in_dim,
+            lang_dim=lang_dim,
+            state_dim=state_enc_dim,
+        )
 
-    dit = DiT_models[f'DiT-{dit_size}'](
-        num_frames=num_future_frames,
-        num_past_frames=num_past_frames,
-        patch_h=patch_h,
-        patch_w=patch_w,
-        fps=fps,
-        in_dim=in_dim,
-        lang_dim=lang_dim,
-        state_dim=state_enc_dim,
-    )
-
-    idm = IDM_models[f'IDM-{idm_size}'](
-        num_past_frames=num_past_frames,
-        num_future_frames=num_future_frames,
-        patch_h=patch_h,
-        patch_w=patch_w,
-        fps=fps,
-        in_dim=in_dim,
-        state_dim=state_enc_dim,
-        action_latent_dim=action_latent_dim,
-    )
+    state_encoder = None
+    idm = None
+    action_decoder = None
+    if idm_size is not None:
+        state_encoder  = StateEncoder(raw_state_dim, state_enc_dim * 2, state_enc_dim)
+        idm = IDM_models[f'IDM-{idm_size}'](
+            num_past_frames=num_past_frames,
+            num_future_frames=num_future_frames,
+            patch_h=patch_h,
+            patch_w=patch_w,
+            fps=fps,
+            in_dim=in_dim,
+            state_dim=state_enc_dim,
+            action_latent_dim=action_latent_dim,
+        )
+        action_decoder = ActionDecoder(action_latent_dim, action_latent_dim * 2, action_dim)
 
     return LeWAM(
         video_encoder=video_encoder,
@@ -153,10 +166,11 @@ def build_lewam(
 
 def build_lewam_with_encoders(
     vjepa2_checkpoint: str,
-    t5gemma_checkpoint: str = None,
+    t5gemma_checkpoint: str | None = None,
     t5gemma_model_id: str = "google/t5gemma-s-s-prefixlm",
     crop_size: int = 384,
     t5gemma_device_map: str = "auto",
+    load_language_encoder: bool = True,
     **kwargs,
 ) -> LeWAM:
     """
@@ -171,5 +185,7 @@ def build_lewam_with_encoders(
     Both encoders are frozen by default.
     """
     video_enc = load_vjepa2_encoder(vjepa2_checkpoint, crop_size=crop_size)
-    lang_enc  = load_t5gemma_encoder(t5gemma_model_id, path=t5gemma_checkpoint, device_map=t5gemma_device_map)
+    lang_enc  = None
+    if load_language_encoder:
+        lang_enc = load_t5gemma_encoder(t5gemma_model_id, path=t5gemma_checkpoint, device_map=t5gemma_device_map)
     return build_lewam(video_encoder=video_enc, language_encoder=lang_enc, **kwargs)

@@ -2,6 +2,11 @@
 ## Implementation
 
 - create training loop
+    - add optimizer backprop and loss calculation (SIGReg, predloss)
+    - visualize predicted outputs vs true outputs ever X training steps and save figures
+        - add the training runs folder to gitignore
+    - check vram usage (maybe sysematically in pytorch instead of using nvidia-smi if possible?)
+
 - refactor LeWAM such that encoding does not need to be done outside the model (in the training loop) 
     - maybe also add a function which will preprocess the frames as well, or add a frames_preprocessed=bool flag
     - same with language, there shouldnt be a need to pass in preencoded langiage tokens unless you want to

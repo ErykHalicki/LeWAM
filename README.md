@@ -55,6 +55,7 @@ export HF_TOKEN={YOUR_TOKEN} # this is needed to be able to install the Gemmma e
 git clone --recurse-submodules https://github.com/ErykHalicki/LeWAM
 cd LeWAM
 ./src/wam/scripts/init/install_and_test.sh
+./src/wam/scripts/init/download_somethingsomethingv2.sh
 ```
 
 ---

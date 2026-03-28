@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+if ! grep -q 'LE_WAM_ROOT' ~/.bashrc; then
+    echo "export LE_WAM_ROOT=$(pwd)" >> ~/.bashrc
+    echo "Added LE_WAM_ROOT to ~/.bashrc"
+fi
+
 # 1. Install uv (Skip if the binary is in the path)
 if ! command -v uv &> /dev/null; then
     echo "Installing uv..."
