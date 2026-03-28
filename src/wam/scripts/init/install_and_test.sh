@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+EXTERNAL_VENV=0
+for arg in "$@"; do
+    [ "$arg" = "--external-venv" ] && EXTERNAL_VENV=1
+done
+
 if ! grep -q 'LE_WAM_ROOT' ~/.bashrc; then
     echo "export LE_WAM_ROOT=$(pwd)" >> ~/.bashrc
     echo "Added LE_WAM_ROOT to ~/.bashrc"
@@ -14,15 +19,16 @@ else
     echo "uv is already installed, skipping."
 fi
 
-# 2. Setup venv (Skip if .venv directory exists)
-if [ ! -d ".venv" ]; then
-    echo "Creating virtual environment..."
-    uv venv .venv
-else
-    echo ".venv already exists, skipping."
+# 2. Setup venv (Skip if .venv directory exists or --external-venv)
+if [ "$EXTERNAL_VENV" = "0" ]; then
+    if [ ! -d ".venv" ]; then
+        echo "Creating virtual environment..."
+        uv venv .venv
+    else
+        echo ".venv already exists, skipping."
+    fi
+    source .venv/bin/activate
 fi
-
-source .venv/bin/activate
 
 # 3. Downloads (mkdir -p already handles existing folders silently)
 mkdir -p weights

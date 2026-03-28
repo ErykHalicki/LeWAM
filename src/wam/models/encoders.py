@@ -166,7 +166,7 @@ def load_vjepa2_encoder(checkpoint_path: str, crop_size: int = 384) -> "VJEPA2Vi
     backbone.load_state_dict(sd, strict=True)
     backbone.eval()
     enc = VJEPA2VideoEncoder(backbone, crop_size=crop_size)
-    enc.set_frozen(False)
+    enc.set_frozen(True)
     return enc
 
 

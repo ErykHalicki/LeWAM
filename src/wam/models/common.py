@@ -200,7 +200,7 @@ class Block(nn.Module):
     q_pos passed to forward controls whether queries get 3D RoPE in SA and CA.
     source_positions controls 3D RoPE on each source's K/V in CA.
     """
-    def __init__(self, hidden_size, num_heads, num_sources, mlp_ratio=4.0, use_adaln=True, sa_first=True, dropout=0.1):
+    def __init__(self, hidden_size, num_heads, num_sources, mlp_ratio=4.0, use_adaln=True, sa_first=True, dropout=0.0):
         super().__init__()
         self.use_adaln = use_adaln
         self.rope = RoPE3D(hidden_size // num_heads)
