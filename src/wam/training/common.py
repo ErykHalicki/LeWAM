@@ -1,10 +1,47 @@
 import os
+import subprocess
 import torch
 import torch.nn.functional as F
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+
+
+def aws_available():
+    return subprocess.run(['which', 'aws'], capture_output=True).returncode == 0
+
+
+def download_checkpoint_from_s3(s3_path: str, local_path: str) -> str:
+    """Download a checkpoint from S3 to local_path only if it doesn't already exist. Returns local_path."""
+    if not os.path.exists(local_path):
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        print(f"Downloading checkpoint from {s3_path}...")
+        subprocess.run(['aws', 's3', 'cp', s3_path, local_path], check=True)
+    else:
+        print(f"Checkpoint already exists at {local_path}, skipping download.")
+    return local_path
+
+
+def upload_to_s3_async(local_path: str, s3_path: str):
+    """Fire-and-forget S3 upload (non-blocking)."""
+    subprocess.Popen(['aws', 's3', 'cp', local_path, s3_path])
+
+
+def resolve_checkpoint(resume: str, le_wam_root: str, s3_path: str, from_aws: bool) -> str:
+    """
+    Resolve a checkpoint path, optionally downloading from S3.
+
+    resume:      filename or relative key (e.g. 'MyRun/MyRun_latest.pt')
+    le_wam_root: root directory for local runs
+    s3_path:     S3 base path (e.g. 's3://bucket/checkpoints')
+    from_aws:    if True, download from S3 if not already local
+    Returns the local absolute path.
+    """
+    local = os.path.join(le_wam_root, 'runs', resume)
+    if from_aws:
+        return download_checkpoint_from_s3(f'{s3_path}/{resume}', local)
+    return local
 
 
 def lookup_language_embeddings(
@@ -24,14 +61,29 @@ def lookup_language_embeddings(
     return padded_embs.to(device), padded_masks.to(device)
 
 
-def save_pca_viz(embeddings, step, run_dir, patch_h, patch_w):
-    tokens = embeddings[0].float().cpu().numpy()
-    T = tokens.shape[0] // (patch_h * patch_w)
+def embed_pca_rgb(tokens_list: list, T: int, patch_h: int, patch_w: int) -> list:
+    """
+    Fit PCA on tokens_list[0], then project all tensors to RGB spatial grids.
+
+    tokens_list: list of (N, D) float tensors (cpu or gpu)
+    Returns list of (T, patch_h, patch_w, 3) numpy arrays in [0, 1].
+    """
+    anchor = tokens_list[0].float().cpu().numpy()
     pca = PCA(n_components=3)
-    components = pca.fit_transform(tokens)
-    components -= components.min(axis=0)
-    components /= components.max(axis=0)
-    frames_pca = components.reshape(T, patch_h, patch_w, 3)
+    pca.fit(anchor)
+    results = []
+    for tokens in tokens_list:
+        c = pca.transform(tokens.float().cpu().numpy())
+        c -= c.min(axis=0)
+        c /= c.max(axis=0) + 1e-8
+        results.append(c.reshape(T, patch_h, patch_w, 3))
+    return results
+
+
+def save_pca_viz(embeddings, step, run_dir, patch_h, patch_w):
+    tokens = embeddings[0].float().cpu()
+    T = tokens.shape[0] // (patch_h * patch_w)
+    frames_pca = embed_pca_rgb([tokens], T, patch_h, patch_w)[0]
 
     fig, axes = plt.subplots(1, T, figsize=(2 * T, 2), squeeze=False)
     axes = axes[0]
@@ -46,6 +98,25 @@ def save_pca_viz(embeddings, step, run_dir, patch_h, patch_w):
 
 
 @torch.no_grad()
+def ode_solve(model, past_frames, x1, lang, l_mask, num_steps: int = 10):
+    """
+    Euler ODE integration from x0 ~ N(0,1) toward x1_pred.
+
+    past_frames: (B, T*H*W, D)
+    x1:          (B, T*H*W, D)  used only for shape / device
+    Returns predicted x1 of the same shape.
+    """
+    device = x1.device
+    x  = torch.randn_like(x1)
+    dt = 1.0 / num_steps
+    for i in range(num_steps):
+        t = torch.full((x.shape[0],), i * dt, device=device)
+        v = model.predict_future(x.float(), t, past_frames.float(), lang=lang, l_mask=l_mask)
+        x = x + v * dt
+    return x
+
+
+@torch.no_grad()
 def save_ode_viz(model, x1, past_frames, lang, l_mask, label, step, run_dir, patch_h, patch_w, num_ode_steps=10, raw_future_frames=None):
     """
     Run Euler ODE integration x0 → x1_pred and visualize alongside actual x1.
@@ -56,39 +127,16 @@ def save_ode_viz(model, x1, past_frames, lang, l_mask, label, step, run_dir, pat
     l_mask:            (1, S)    | None
     raw_future_frames: (1, C, T, H, W) | None  ImageNet-normalized, one frame per token
     """
-    device = x1.device
-    past_frames = past_frames.float()
-    x1          = x1.float()
+    x1 = x1.float()
     if lang is not None:
         lang = lang.float()
 
-    x  = torch.randn_like(x1)
-    dt = 1.0 / num_ode_steps
-
-    for i in range(num_ode_steps):
-        t_val = i * dt
-        t = torch.full((1,), t_val, device=device)
-        v = model.predict_future(x, t, past_frames, lang=lang, l_mask=l_mask)
-        x = x + v * dt
-
-    x1_pred = x.float()
-    x1_actual = x1.float()
+    x1_pred   = ode_solve(model, past_frames.float(), x1, lang, l_mask, num_steps=num_ode_steps)
+    x1_actual = x1
 
     T = x1_actual.shape[1] // (patch_h * patch_w)
 
-    tokens_actual = x1_actual[0].cpu().numpy()
-    tokens_pred   = x1_pred[0].cpu().numpy()
-
-    pca = PCA(n_components=3)
-    pca.fit(tokens_actual)
-    def to_rgb(tokens):
-        c = pca.transform(tokens)
-        c -= c.min(axis=0)
-        c /= c.max(axis=0) + 1e-8
-        return c.reshape(T, patch_h, patch_w, 3)
-
-    actual_rgb = to_rgb(tokens_actual)
-    pred_rgb   = to_rgb(tokens_pred)
+    actual_rgb, pred_rgb = embed_pca_rgb([x1_actual[0], x1_pred[0]], T, patch_h, patch_w)
 
     n_rows = 3 if raw_future_frames is not None else 2
     fig, axes = plt.subplots(n_rows, T, figsize=(2 * T, 2 * n_rows), squeeze=False)

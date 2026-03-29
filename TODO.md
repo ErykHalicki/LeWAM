@@ -1,38 +1,40 @@
 
 ## Implementation
 
-- create training loop
-    - add optimizer backprop and loss calculation (SIGReg, predloss)
-    - visualize predicted outputs vs true outputs ever X training steps and save figures
-        - add the training runs folder to gitignore
-    - check vram usage (maybe sysematically in pytorch instead of using nvidia-smi if possible?)
+- convert the hugging face lerobot community dataset (HuggingFaceVLA/community_dataset_v3) to LeRobotDataset v3 format
+    - download dataset to euler scratch storage (all v2.1)
+    - convert each individual datasets to v2.1->v3.0 (or 2.0->2.1->3.0 if needed)
+    - check the distribution of dataset version systematically before downloading if possible
+        - check for `"codebase_version": "v2.1",` and 2.0 and 3.0 inside `HuggingFaceVLA/community_dataset_v3/{author}/{dataset_name}/meta/info.json`
+    - [Droid conversion guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3)
+    - v2.1 to 3.0 conversion command: `python src/lerobot/scripts/convert_dataset_v21_to_v30.py --repo-id your_id/existing_dataset`
+    - upload to hf hub
 
-- refactor LeWAM such that encoding does not need to be done outside the model (in the training loop) 
-    - maybe also add a function which will preprocess the frames as well, or add a frames_preprocessed=bool flag
-    - same with language, there shouldnt be a need to pass in preencoded langiage tokens unless you want to
-- fix IDM multi camera conditioning case. it should not have and aux field in cross attention. instead, it should just get passed all camera frames equally in both 
-past and future (just concat the embeddings into 2 long lists)
-- make the ground truth actions and patch embeddings are correctly synced
+- Euler details for conversion:
+    - scratch dir:  /cluster/scratch/ehalicki/
+    - uses slurm management
+    - we will need to make a bash script to distribute the work across multiple workers
+        - parrallelize v2.1 -> 3.0 conversion
+
+---
+
+- create a training script for lerobot datasets (should work for any lerobot dataset since they all follow te same format)
+
+- make sure the ground truth actions and patch embeddings are correctly synced
     - VJEPA2 pairs frames, so there are in_frames/2 output frames. Make sure that the relative actions account for this correctly
+
+- figure out what happened to my pc?
+
+### Optional / low priority
 - create a decoder for visualizing predicted embeddings
     - can be trained on the embedding - image pairs from just the encoder, and then used to visualize predictor outputs
-
-- test trivial pretraining, overfitting on one video
-    - use decoder to test if the predicted outputs make sense
-    - can also compare PCA projections of prediced vs ground truth embeddings
-- run a slghtly larger pretraining experiment with a real dataset
-    - visualize predicted outputs
-- come up with training schedule
-    - pre training, mid training?, post training
-    - maybe the distribution of `tau` can slowly shift higher as training goes on? i.e warming up on low noise amounts, and then progressively increasing the noise mean
-        - although there isnt really a strong reason to do this
-- pre-compute and cache language embeddings offline (T5GemmaEncoderModel, frozen), no need to run encoder at training time, just load tensors
 
 ## Evaluation
 - What benchmark to use for testing and comparing to other approaches
     - Libero? 
     - My own suite of comparisons? 
         - eg. also train an ACT, BC, Diffusion policy, smolVLA, etc.
+    - for baselines, to be fair, make a BC policy that uses vjepa2 as its visual encoder
 - rollout policy on So101 in MuJoCo or Isacc sim 
 - Test on real hardware depending on simulated results
 
@@ -40,3 +42,5 @@ past and future (just concat the embeddings into 2 long lists)
 - update architecture.tex to match real code
     - make architecture diagram for DiT specifically as well
 - write up basic motivation in main.tex
+- you can look at the TeX source of paper on arxiv for reference on how to make figures for example
+- read about other world models referenced in dreamzero and cite them

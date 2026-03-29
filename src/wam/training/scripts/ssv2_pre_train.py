@@ -17,7 +17,7 @@ import time
 import datetime
 from zoneinfo import ZoneInfo
 from torch.profiler import profile, record_function, ProfilerActivity
-from wam.training.common import save_ode_viz, lookup_language_embeddings
+from wam.training.common import save_ode_viz, lookup_language_embeddings, resolve_checkpoint, aws_available, upload_to_s3_async
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--profile', action='store_true')
@@ -87,15 +87,7 @@ model.video_encoder.preprocessor = model.video_encoder.preprocessor.to('cpu')
 
 _resume_ckpt = None
 if args.resume:
-    if args.resume_from_aws:
-        s3_path = f'{args.s3_path}/{args.resume}'
-        local_path = os.path.join(le_wam_root, 'runs', args.resume)
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        print(f"Downloading checkpoint from {s3_path}...")
-        subprocess.run(['aws', 's3', 'cp', s3_path, local_path], check=True)
-        args.resume = local_path
-    else:
-        args.resume = os.path.join(le_wam_root, 'runs', args.resume)
+    args.resume = resolve_checkpoint(args.resume, le_wam_root, args.s3_path, args.resume_from_aws)
 if args.resume:
     print(f"Loading checkpoint from {args.resume}...")
     _resume_ckpt = torch.load(args.resume, map_location=device, weights_only=False)
@@ -284,9 +276,6 @@ if args.profile:
 
 loss_log = []
 
-def _aws_available():
-    return args.s3_path and subprocess.run(['which', 'aws'], capture_output=True).returncode == 0
-
 def save_checkpoint(past_frames=None, future_frames=None, text_embeddings=None, text_mask=None, label=None, raw_future=None):
     ckpt_path   = os.path.join(TRAINING_RUN_DIR, f'{MODEL_TAG}_latest.pt')
     losses_path = os.path.join(TRAINING_RUN_DIR, 'losses.json')
@@ -331,11 +320,11 @@ def save_checkpoint(past_frames=None, future_frames=None, text_embeddings=None, 
         ode_path = os.path.join(TRAINING_RUN_DIR, 'plots', f'ode-step{num_steps}.png')
 
     print(f"Checkpoint saved: {ckpt_path}")
-    if _aws_available():
-        subprocess.Popen(['aws', 's3', 'cp', ckpt_path, f'{s3_prefix}/{MODEL_TAG}_latest.pt'])
-        subprocess.Popen(['aws', 's3', 'cp', losses_path, f'{s3_prefix}/losses.json'])
+    if args.s3_path and aws_available():
+        upload_to_s3_async(ckpt_path, f'{s3_prefix}/{MODEL_TAG}_latest.pt')
+        upload_to_s3_async(losses_path, f'{s3_prefix}/losses.json')
         if ode_path and os.path.exists(ode_path):
-            subprocess.Popen(['aws', 's3', 'cp', ode_path, f'{s3_prefix}/ode-step{num_steps}.png'])
+            upload_to_s3_async(ode_path, f'{s3_prefix}/ode-step{num_steps}.png')
 
 
 start = time.time()

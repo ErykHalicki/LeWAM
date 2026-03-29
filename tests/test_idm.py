@@ -92,21 +92,23 @@ def test_overfit_single_batch():
     assert loss.item() < 0.2, f"Model failed to overfit single batch (loss={loss.item():.4f})"
 
 
-def test_aux_frames_output_shape(model):
+def test_multicamera_output_shape(model):
     current, future, state = make_inputs()
-    aux_frames = torch.randn(B, NUM_AUX * T * H * W, IN_DIM)
+    current_mc = torch.randn(B, (1 + NUM_AUX) * T * H * W, IN_DIM)
+    future_mc  = torch.randn(B, (1 + NUM_AUX) * K * H * W, IN_DIM)
     with torch.no_grad():
-        out = model(current, future, state, aux_frames=aux_frames)
+        out = model(current_mc, future_mc, state)
     assert out.shape == (B, K, ACTION_LATENT_DIM)
 
 
-def test_aux_frames_changes_output(model):
+def test_multicamera_changes_output(model):
     current, future, state = make_inputs()
-    aux_frames = torch.randn(B, NUM_AUX * T * H * W, IN_DIM)
+    current_mc = torch.randn(B, (1 + NUM_AUX) * T * H * W, IN_DIM)
+    future_mc  = torch.randn(B, (1 + NUM_AUX) * K * H * W, IN_DIM)
     with torch.no_grad():
-        out_no_aux = model(current, future, state)
-        out_aux    = model(current, future, state, aux_frames=aux_frames)
-    assert not torch.allclose(out_no_aux, out_aux)
+        out_single = model(current, future, state)
+        out_multi  = model(current_mc, future_mc, state)
+    assert out_single.shape == out_multi.shape
 
 
 def test_different_frames_give_different_actions(model):

@@ -135,6 +135,29 @@ class GemmaLanguageEncoder(LanguageEncoder):
         return out.last_hidden_state, mask
 
 
+def build_vjepa2_encoder_arch(crop_size: int = 384) -> "VJEPA2VideoEncoder":
+    """
+    Build a VJEPA2-B encoder with random weights (architecture only).
+    Use this when weights will be loaded via load_state_dict afterward.
+    """
+    from vjepa2.app.vjepa_2_1.models.vision_transformer import vit_base
+
+    backbone = vit_base(
+        patch_size=16,
+        img_size=(384, 384),
+        num_frames=16,
+        tubelet_size=2,
+        use_sdpa=True,
+        use_SiLU=False,
+        wide_SiLU=True,
+        uniform_power=True,
+        use_rope=True,
+        img_temporal_dim_size=1,
+        interpolate_rope=True,
+    )
+    return VJEPA2VideoEncoder(backbone, crop_size=crop_size)
+
+
 def load_vjepa2_encoder(checkpoint_path: str, crop_size: int = 384) -> "VJEPA2VideoEncoder":
     """
     Load a VJEPA2-B encoder from a checkpoint file.
