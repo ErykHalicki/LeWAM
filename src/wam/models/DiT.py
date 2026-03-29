@@ -47,7 +47,7 @@ class TimestepEmbedder(nn.Module):
         return embedding
 
     def forward(self, t):
-        return self.mlp(self.timestep_embedding(t, self.frequency_embedding_size))
+        return self.mlp(self.timestep_embedding(t, self.frequency_embedding_size).to(t.dtype))
 
 
 class FinalLayer(nn.Module):
@@ -125,6 +125,12 @@ class DiT(nn.Module):
     def set_fps(self, fps: float):
         self.future_pos.set_fps(fps)
         self.past_pos.set_fps(fps)
+
+    def set_patch_grid(self, H: int, W: int):
+        self.patch_h = H
+        self.patch_w = W
+        self.future_pos.set_patch_grid(H, W)
+        self.past_pos.set_patch_grid(H, W)
 
     def initialize_weights(self):
         def _basic_init(module):

@@ -3,6 +3,56 @@ import subprocess
 import torch
 import torch.nn.functional as F
 import matplotlib
+
+
+def find_max_batch_size(try_batch_fn, target_fraction=0.9):
+    """
+    Binary search for the largest batch size fitting within target_fraction of GPU VRAM.
+
+    try_batch_fn(batch_size) -> float: peak VRAM fraction used.
+    Should raise torch.cuda.OutOfMemoryError on OOM.
+    """
+    total_vram = torch.cuda.get_device_properties(0).total_memory
+
+    def _run(batch_size):
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        try_batch_fn(batch_size)
+        peak = torch.cuda.max_memory_allocated()
+        return peak / total_vram
+
+    lo, hi = 1, 1
+    while True:
+        try:
+            used = _run(hi)
+            print(f"  batch_size={hi}: {used*100:.1f}% VRAM peak")
+            if used >= target_fraction:
+                lo = hi // 2
+                break
+            lo = hi
+            hi *= 2
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            lo = hi // 2
+            break
+
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        try:
+            used = _run(mid)
+            print(f"  batch_size={mid}: {used*100:.1f}% VRAM peak")
+            if used >= target_fraction:
+                hi = mid
+            else:
+                lo = mid
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            hi = mid
+
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    print(f"Selected batch_size={lo}")
+    return lo
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
@@ -125,7 +175,7 @@ def save_ode_viz(model, x1, past_frames, lang, l_mask, label, step, run_dir, pat
     past_frames:       (1, T*H*W, D)
     lang:              (1, S, D) | None
     l_mask:            (1, S)    | None
-    raw_future_frames: (1, C, T, H, W) | None  ImageNet-normalized, one frame per token
+    raw_future_frames: (1, C, T, H, W) | None  raw float in [0, 1], one frame per token
     """
     x1 = x1.float()
     if lang is not None:
@@ -143,8 +193,7 @@ def save_ode_viz(model, x1, past_frames, lang, l_mask, label, step, run_dir, pat
 
     row = 0
     if raw_future_frames is not None:
-        frames = raw_future_frames[0].permute(1, 0, 2, 3).float().cpu()  # (T, C, H, W)
-        frames = model.video_encoder.preprocessor.unnormalize(frames)
+        frames = raw_future_frames[0].permute(1, 0, 2, 3).float().cpu().clamp(0, 1)  # (T, C, H, W)
         frames = F.interpolate(frames, size=(patch_h * 8, patch_w * 8), mode='bilinear', align_corners=False)
         frames_np = frames.permute(0, 2, 3, 1).numpy()
         for t in range(T):

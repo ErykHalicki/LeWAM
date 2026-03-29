@@ -6,7 +6,9 @@ for arg in "$@"; do
     [ "$arg" = "--external-venv" ] && EXTERNAL_VENV=1
 done
 
+export LE_WAM_ROOT=$(pwd)
 if ! grep -q 'LE_WAM_ROOT' ~/.bashrc; then
+    export LE_WAM_ROOT=$(pwd)
     echo "export LE_WAM_ROOT=$(pwd)" >> ~/.bashrc
     echo "Added LE_WAM_ROOT to ~/.bashrc"
 fi
@@ -54,6 +56,7 @@ fi
 
 # 4. Install and run
 uv pip install -e .
+./src/wam/scripts/init/install_aws.sh
 python src/wam/scripts/init/strip_gemma_decoder.py
 python src/wam/scripts/tests/test_model_loads.py
 
