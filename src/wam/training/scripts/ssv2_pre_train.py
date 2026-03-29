@@ -17,7 +17,7 @@ import time
 import datetime
 from zoneinfo import ZoneInfo
 from torch.profiler import profile, record_function, ProfilerActivity
-from wam.training.common import save_ode_viz, lookup_language_embeddings, resolve_checkpoint, aws_available, upload_to_s3_async
+from wam.training.common import save_ode_viz, lookup_language_embeddings, resolve_checkpoint, aws_available, upload_to_s3_async, find_max_batch_size
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--profile', action='store_true')
@@ -158,59 +158,20 @@ def train_step(batch, do_update):
 
 
 #---------------BATCH SIZE CALIBRATION---------------------
-def find_max_batch_size(sample_batch, target_fraction=0.9):
-    total_vram = torch.cuda.get_device_properties(0).total_memory
-
-    def try_batch(batch_size):
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        test_batch = {
-            'video': sample_batch['video'][:1].repeat(batch_size, 1, 1, 1, 1),
-            'label': [sample_batch['label'][0]] * batch_size,
-        }
-        optimizer.zero_grad()
-        train_step(test_batch, do_update=True)
-        optimizer.zero_grad()
-        peak = torch.cuda.max_memory_allocated()
-        return peak / total_vram
-
-    lo, hi = 1, 1
-    while True:
-        try:
-            used = try_batch(hi)
-            print(f"  batch_size={hi}: {used*100:.1f}% VRAM peak")
-            if used >= target_fraction:
-                lo = hi // 2
-                break
-            lo = hi
-            hi *= 2
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            lo = hi // 2
-            break
-
-    while lo + 1 < hi:
-        mid = (lo + hi) // 2
-        try:
-            used = try_batch(mid)
-            print(f"  batch_size={mid}: {used*100:.1f}% VRAM peak")
-            if used >= target_fraction:
-                hi = mid
-            else:
-                lo = mid
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            hi = mid
-
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
-    print(f"Selected batch_size={lo}")
-    return lo
-
 print("Calibrating batch size...")
 _calib_iter = iter(train_loader)
 _sample_batch = next(_calib_iter)
-BATCH_SIZE = find_max_batch_size(_sample_batch)
+
+def _try_batch(batch_size):
+    test_batch = {
+        'video': _sample_batch['video'][:1].repeat(batch_size, 1, 1, 1, 1),
+        'label': [_sample_batch['label'][0]] * batch_size,
+    }
+    optimizer.zero_grad()
+    train_step(test_batch, do_update=True)
+    optimizer.zero_grad()
+
+BATCH_SIZE = find_max_batch_size(_try_batch)
 optimizer.state.clear()
 optimizer.zero_grad()
 ACCUM_STEPS = max(1, args.effective_batch_size // BATCH_SIZE)
@@ -289,7 +250,7 @@ def save_checkpoint(past_frames=None, future_frames=None, text_embeddings=None, 
         'scheduler':  scheduler.state_dict(),
         'config': {
             'crop_size':        CROP_SIZE,
-            'fps':              float(TOKENS_PER_SECOND),
+            'fps':              float(TOKENS_PER_SECOND) * 2,
             'num_past_frames':  TOKENS_PER_SECOND,
             'num_future_frames': TOKENS_PER_SECOND,
             'patch_h':          PATCH_H,
@@ -298,7 +259,6 @@ def save_checkpoint(past_frames=None, future_frames=None, text_embeddings=None, 
             'idm_size':         'B' if model.idm is not None else None,
             'language_encoder': model.language_encoder is not None,
             'raw_frames':       RAW_FRAMES,
-            'tokens_per_second': TOKENS_PER_SECOND,
             'amp_dtype':        str(AMP_DTYPE),
             'batch_size':       BATCH_SIZE,
             'accum_steps':      ACCUM_STEPS,
