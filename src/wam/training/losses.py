@@ -87,7 +87,7 @@ def detached_ode_loss(dit, idm, x1, past_frames, current_frames, l, state, actio
     x0 = torch.randn_like(x1)
     with torch.no_grad():
         x1_pred = _euler_solve(dit, x0, past_frames, l, state, l_mask, num_steps)
-    return F.mse_loss(idm(current_frames, x1_pred, state), actions)
+    return None, F.mse_loss(idm(current_frames, x1_pred, state), actions)
 
 
 def end_to_end_loss(dit, idm, x1, past_frames, current_frames, l, state, actions, l_mask=None, ode_solve_steps=1):
