@@ -1,21 +1,23 @@
 # --------------------------------------------------------
 # Inverse Dynamics Model (IDM)
 #
-# IDM forward(past_frames, future_frames, state, aux_frames):
-#   past_frames  (B, T*H*W, in_dim)              past frame patch embeddings (main camera)
-#   future_frames (B, K*H*W, in_dim)             predicted (or GT) future patch embeddings
-#   state         (B, state_dim)|None            proprioceptive state vector
-#   aux_frames    (B, C*T*H*W, in_dim)|None      auxiliary camera past frames (not predicted)
+# IDM forward(past_frames, future_frames, state):
+#   past_frames   (B, C*T*H*W, in_dim)  past frame patch embeddings (all cameras concatenated)
+#   future_frames (B, C*K*H*W, in_dim)  predicted (or GT) future patch embeddings (all cameras)
+#   state         (B, state_dim)|None   proprioceptive state vector
 #   → returns     (B, chunk_len, action_latent_dim)  action latents (pass to ActionDecoder for actions)
 #
-# Each Block: SA (bidirectional, no RoPE, no adaLN) → CA (past+RoPE, future+RoPE, state, aux+RoPE) → MLP
+# For multi-camera, concatenate all cameras' tokens along dim=1 before calling forward.
+# RoPE position ids are repeated per camera (same spatial/temporal ids for each camera).
+#
+# Each Block: CA (past+RoPE, future+RoPE, state) → SA (bidirectional, no RoPE, no adaLN) → MLP
 # Loss (not in this file): MSE(a_pred, a_gt)
 # --------------------------------------------------------
 
 import torch
 import torch.nn as nn
 
-from wam.models.common import Block, make_mlp, PatchPositionIds
+from wam.models.common import Block, PatchPositionIds
 
 
 class IDM(nn.Module):
@@ -26,10 +28,9 @@ class IDM(nn.Module):
 
     Outputs action latents (B, K, action_latent_dim). Pass through ActionDecoder to get actions.
 
-    past_frames:  (B, T*H*W, in_dim)        main camera
-    future_frames: (B, K*H*W, in_dim)
+    past_frames:   (B, C*T*H*W, in_dim)  all cameras concatenated along token dim
+    future_frames: (B, C*K*H*W, in_dim)  all cameras concatenated along token dim
     state:         (B, state_dim)|None
-    aux_frames:    (B, C*T*H*W, in_dim)|None
     """
     def __init__(
         self,
@@ -48,18 +49,18 @@ class IDM(nn.Module):
     ):
         super().__init__()
         self.num_past_frames = num_past_frames
+        self.num_future_frames = num_future_frames
         self.patch_h = patch_h
         self.patch_w = patch_w
         self.past_proj   = nn.Linear(in_dim, hidden_size)
         self.future_proj = nn.Linear(in_dim, hidden_size)
         self.state_proj  = nn.Linear(state_dim, hidden_size)
-        self.aux_proj    = make_mlp(in_dim, hidden_size, hidden_size)
 
         self.action_queries = nn.Parameter(torch.randn(1, num_future_frames, hidden_size) * 0.02)
         self.action_pos_emb = nn.Parameter(torch.randn(1, num_future_frames, hidden_size) * 0.02)
 
         self.blocks = nn.ModuleList([
-            Block(hidden_size, num_heads, num_sources=4, mlp_ratio=mlp_ratio, use_adaln=False, sa_first=False)
+            Block(hidden_size, num_heads, num_sources=3, mlp_ratio=mlp_ratio, use_adaln=False, sa_first=False)
             for _ in range(depth)
         ])
         self.norm     = nn.LayerNorm(hidden_size, eps=1e-6)
@@ -81,38 +82,39 @@ class IDM(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-    def forward(self, past_frames, future_frames, state=None, aux_frames=None):
+    def forward(self, past_frames, future_frames, state=None):
         """
-        past_frames:  (B, T*H*W, in_dim)        main camera — always required
-        future_frames: (B, K*H*W, in_dim)        main camera predicted future — always required
+        past_frames:   (B, C*T*H*W, in_dim)  all cameras concatenated (C=1 for single camera)
+        future_frames: (B, C*K*H*W, in_dim)  all cameras concatenated
         state:         (B, state_dim)|None
-        aux_frames:    (B, C*T*H*W, in_dim)|None auxiliary cameras (not predicted)
         """
         B = past_frames.shape[0]
+
+        tokens_per_past   = self.num_past_frames * self.patch_h * self.patch_w
+        tokens_per_future = self.num_future_frames * self.patch_h * self.patch_w
+        num_cameras_past   = past_frames.shape[1] // tokens_per_past
+        num_cameras_future = future_frames.shape[1] // tokens_per_future
+        assert num_cameras_past == num_cameras_future, (
+            f"Camera count mismatch: past has {num_cameras_past}, future has {num_cameras_future}"
+        )
 
         past        = self.past_proj(past_frames)
         future      = self.future_proj(future_frames)
         state_token = self.state_proj(state).unsqueeze(1) if state is not None else None
 
-        past_pos = self.past_pos.pos
-        fut_pos  = self.future_pos.pos
+        t, h, w = self.past_pos.pos
+        past_pos = (t.repeat(num_cameras_past), h.repeat(num_cameras_past), w.repeat(num_cameras_past))
 
-        if aux_frames is not None:
-            num_aux = aux_frames.shape[1] // (self.num_past_frames * self.patch_h * self.patch_w)
-            aux = self.aux_proj(aux_frames)
-            t, h, w = self.past_pos.pos
-            aux_pos = (t.repeat(num_aux), h.repeat(num_aux), w.repeat(num_aux))
-        else:
-            aux     = None
-            aux_pos = None
+        t, h, w = self.future_pos.pos
+        fut_pos = (t.repeat(num_cameras_future), h.repeat(num_cameras_future), w.repeat(num_cameras_future))
 
         q = self.action_queries.expand(B, -1, -1) + self.action_pos_emb
 
         for block in self.blocks:
             q = block(
                 q,
-                sources=[past, future, state_token, aux], #TODO THIS NEEDS TO BE FIXED, ALL FRAMES SHOULD BE TREATED EQUALLY FOR ACTION PREDICTION
-                source_positions=[past_pos, fut_pos, None, aux_pos],
+                sources=[past, future, state_token],
+                source_positions=[past_pos, fut_pos, None],
                 cond=None,
                 q_pos=None,
             )

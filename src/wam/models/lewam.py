@@ -4,7 +4,7 @@ VERSION = "v0.1"
 
 from wam.models.DiT import DiT_models
 from wam.models.IDM import IDM_models
-from wam.models.encoders import StateEncoder, ActionDecoder, load_vjepa2_encoder, load_t5gemma_encoder
+from wam.models.encoders import StateEncoder, ActionDecoder, load_vjepa2_encoder, load_t5gemma_encoder, build_vjepa2_encoder_arch
 
 
 class LeWAM(nn.Module):
@@ -71,18 +71,17 @@ class LeWAM(nn.Module):
             state_emb = None
         return self.dit(x_t, t, past_frames, lang, state_emb, aux_frames, l_mask)
 
-    def infer_actions(self, past_frames, future_frames, state, aux_frames=None):
+    def infer_actions(self, past_frames, future_frames, state):
         """
         IDM + ActionDecoder forward for action prediction.
 
-        past_frames:   (B, T*H*W, in_dim)
-        future_frames: (B, K*H*W, in_dim)
+        past_frames:   (B, C*T*H*W, in_dim)  all cameras concatenated
+        future_frames: (B, C*K*H*W, in_dim)  all cameras concatenated
         state:         (B, raw_state_dim)
-        aux_frames:    (B, C*T*H*W, in_dim)|None
         → (B, K, action_dim)
         """
         state_emb = self.state_encoder(state)
-        latents   = self.idm(past_frames, future_frames, state_emb, aux_frames)
+        latents   = self.idm(past_frames, future_frames, state_emb)
         return self.action_decoder(latents)
 
     def forward(self, x_t, t, past_frames, future_frames, state, lang=None, aux_frames=None, l_mask=None):
@@ -92,7 +91,7 @@ class LeWAM(nn.Module):
         → v_pred (B, K*H*W, in_dim), actions (B, K, action_dim)
         """
         v_pred  = self.predict_future(x_t, t, past_frames, state, lang, aux_frames, l_mask)
-        actions = self.infer_actions(past_frames, future_frames, state, aux_frames)
+        actions = self.infer_actions(past_frames, future_frames, state)
         return v_pred, actions
 
 
@@ -161,6 +160,27 @@ def build_lewam(
         dit=dit,
         idm=idm,
         action_decoder=action_decoder,
+    )
+
+
+def build_lewam_for_resume(cfg: dict) -> "LeWAM":
+    """
+    Build a LeWAM model matching a saved checkpoint config, without loading any
+    pretrained encoder weights. Call model.load_state_dict(ckpt['model']) afterward.
+
+    cfg: the 'config' dict stored in the checkpoint.
+    """
+    video_enc = build_vjepa2_encoder_arch(crop_size=cfg.get('crop_size', 224))
+    return build_lewam(
+        video_encoder=video_enc,
+        language_encoder=None,
+        fps=cfg.get('fps', 6.0),
+        num_past_frames=cfg.get('num_past_frames', 6),
+        num_future_frames=cfg.get('num_future_frames', 6),
+        patch_h=cfg.get('patch_h', 14),
+        patch_w=cfg.get('patch_w', 14),
+        dit_size=cfg.get('dit_size', 'B'),
+        idm_size=cfg.get('idm_size', None),
     )
 
 
