@@ -76,9 +76,9 @@ class VJEPA2VideoPreprocessor(nn.Module):
     def forward(self, frames):
         B, T, C, H, W = frames.shape
         x = frames.view(B * T, C, H, W).float()
-        x = TF.resize(x, self.crop_size, antialias=True)
-        x = TF.center_crop(x, self.crop_size)
-        x = x / 255.0
+        #x = TF.resize(x, self.crop_size, antialias=True)
+        #x = TF.center_crop(x, self.crop_size)
+        #x = x / 255.0
         x = x.view(B, T, C, self.crop_size, self.crop_size)
         x = x.permute(0, 2, 1, 3, 4)               # (B, C, T, H, W)
         x = (x - self.mean) / self.std
@@ -197,7 +197,7 @@ def load_t5gemma_encoder(
     model_id: str = "google/t5gemma-s-s-prefixlm",
     path=None,
     torch_dtype=None,
-    device_map: str = "auto",
+    device_map: str | None = "auto",
 ) -> "GemmaLanguageEncoder":
     """
     Load a T5Gemma encoder from HuggingFace.
@@ -258,3 +258,49 @@ class ActionDecoder(nn.Module):
 
     def forward(self, latents):
         return self.mlp(latents)
+
+
+class ActionPreprocessor(nn.Module):
+    """
+    Normalizes and unnormalizes relative actions and state using precomputed per-dim stats.
+
+    Stats are loaded from a norm_stats.pt file produced by precompute_norm_stats.py:
+        {
+            'rel_action': {'p5', 'p95', 'mean', 'std'},
+            'state':      {'p5', 'p95', 'mean', 'std'},
+        }
+
+    Normalization:
+        1. Clamp to [p5, p95]
+        2. Subtract mean, divide by std
+
+    All buffers move with the module (to(), cuda(), etc.).
+    """
+
+    rel_action_p5:   torch.Tensor
+    rel_action_p95:  torch.Tensor
+    rel_action_mean: torch.Tensor
+    rel_action_std:  torch.Tensor
+    state_p5:        torch.Tensor
+    state_p95:       torch.Tensor
+    state_mean:      torch.Tensor
+    state_std:       torch.Tensor
+
+    def __init__(self, stats_path: str):
+        super().__init__()
+        stats = torch.load(stats_path, map_location="cpu", weights_only=True)
+        for key in ("rel_action", "state"):
+            for stat in ("p5", "p95", "mean", "std"):
+                self.register_buffer(f"{key}_{stat}", stats[key][stat].float())
+
+    def normalize_rel_action(self, x: torch.Tensor) -> torch.Tensor:
+        return (torch.maximum(torch.minimum(x, self.rel_action_p95), self.rel_action_p5) - self.rel_action_mean) / self.rel_action_std
+
+    def unnormalize_rel_action(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.rel_action_std + self.rel_action_mean
+
+    def normalize_state(self, x: torch.Tensor) -> torch.Tensor:
+        return (torch.maximum(torch.minimum(x, self.state_p95), self.state_p5) - self.state_mean) / self.state_std
+
+    def unnormalize_state(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.state_std + self.state_mean

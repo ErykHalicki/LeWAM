@@ -25,16 +25,27 @@ class PatchPositionIds(nn.Module):
         self._num_frames = num_frames
         self._H = H
         self._W = W
+        self._fps = fps
         t_ids, h_ids, w_ids = make_patch_ids(t_start, num_frames, H, W, fps)
         self.register_buffer('t_ids', t_ids, persistent=False)
         self.register_buffer('h_ids', h_ids, persistent=False)
         self.register_buffer('w_ids', w_ids, persistent=False)
 
+    def _recompute(self):
+        device = self.t_ids.device
+        t_ids, h_ids, w_ids = make_patch_ids(self._t_start, self._num_frames, self._H, self._W, self._fps)
+        self.t_ids = t_ids.to(device)
+        self.h_ids = h_ids.to(device)
+        self.w_ids = w_ids.to(device)
+
     def set_fps(self, fps: float):
-        t_ids, h_ids, w_ids = make_patch_ids(self._t_start, self._num_frames, self._H, self._W, fps)
-        self.t_ids = t_ids.to(self.t_ids.device)
-        self.h_ids = h_ids.to(self.h_ids.device)
-        self.w_ids = w_ids.to(self.w_ids.device)
+        self._fps = fps
+        self._recompute()
+
+    def set_patch_grid(self, H: int, W: int):
+        self._H = H
+        self._W = W
+        self._recompute()
 
     @property
     def pos(self):
@@ -92,8 +103,8 @@ class RoPE3D(nn.Module):
         return torch.cat([-x2, x1], dim=-1)
 
     def _rot(self, x, positions, freqs):
-        angles = positions.float()[:, None] * freqs[None, :]
-        angles = torch.cat([angles, angles], dim=-1)
+        angles = positions.float()[:, None] * freqs.float()[None, :]
+        angles = torch.cat([angles, angles], dim=-1).to(x.dtype)
         cos = angles.cos()[None, None]
         sin = angles.sin()[None, None]
         return x * cos + self._rotate_half(x) * sin
@@ -200,7 +211,7 @@ class Block(nn.Module):
     q_pos passed to forward controls whether queries get 3D RoPE in SA and CA.
     source_positions controls 3D RoPE on each source's K/V in CA.
     """
-    def __init__(self, hidden_size, num_heads, num_sources, mlp_ratio=4.0, use_adaln=True, sa_first=True, dropout=0.0):
+    def __init__(self, hidden_size, num_heads, num_sources=0, mlp_ratio=4.0, use_adaln=True, sa_first=True, dropout=0.0, no_ca=False):
         super().__init__()
         self.use_adaln = use_adaln
         self.rope = RoPE3D(hidden_size // num_heads)
@@ -209,8 +220,9 @@ class Block(nn.Module):
         self.norm1  = nn.LayerNorm(hidden_size, elementwise_affine=affine, eps=1e-6)
         self.sa     = SelfAttention(hidden_size, num_heads)
 
-        self.norm_ca = nn.LayerNorm(hidden_size, eps=1e-6)
-        self.ca      = CrossAttention(hidden_size, num_heads, num_sources)
+        self.no_ca   = no_ca
+        self.norm_ca = nn.LayerNorm(hidden_size, eps=1e-6) if not no_ca else None
+        self.ca      = CrossAttention(hidden_size, num_heads, num_sources) if not no_ca else None
 
         self.norm2    = nn.LayerNorm(hidden_size, elementwise_affine=affine, eps=1e-6)
         self.mlp      = make_mlp(hidden_size, int(hidden_size * mlp_ratio), hidden_size)
@@ -233,6 +245,8 @@ class Block(nn.Module):
         return x + out
 
     def _run_ca(self, x, sources, source_positions, source_masks, q_pos):
+        if self.no_ca:
+            return x
         out = self.drop(self.ca(self.norm_ca(x), sources, rope=self.rope, q_pos=q_pos,
                                 source_positions=source_positions, source_masks=source_masks))
         return x + out

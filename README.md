@@ -42,8 +42,8 @@ LeWAM/
 
 ## Datasets
 
-- [SmolVLA Training Set](https://huggingface.co/datasets/HuggingFaceVLA/community_dataset_v2) — robot finetuning
-- [SomethingSomethingV2](https://huggingface.co/datasets/HuggingFaceM4/something_something_v2) — video pretraining
+- [LeWAM community dataset](https://huggingface.co/datasets/ehalicki/LeWAM_community_dataset) — robot finetuning
+- [SomethingSomethingV2](https://huggingface.co/datasets/HuggingFaceM4/something_something_v2) — experiments and video pretraining
 
 ---
 
