@@ -44,20 +44,8 @@ else
     echo "V-JEPA weights already exist, skipping."
 fi
 
-# Skip HF download if the specific model directory exists
-if [ ! -d "weights/t5gemma-s-s-prefixlm" ]; then
-    echo "Downloading Gemma weights..."
-    uv tool install hf
-    hf auth login --token $HF_TOKEN
-    hf download google/t5gemma-s-s-prefixlm --local-dir ./weights/t5gemma-s-s-prefixlm
-else
-    echo "Gemma weights already exist, skipping."
-fi
-
 # 4. Install and run
 uv pip install -e .
 ./src/wam/scripts/init/install_aws.sh
-python src/wam/scripts/init/strip_gemma_decoder.py
-python src/wam/scripts/tests/test_model_loads.py
 
 

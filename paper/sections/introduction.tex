@@ -1,3 +1,19 @@
 \section{Introduction}
 
-[TODO]
+Over the last decade, the field of robot learning has seen explosive growth, equipping general purpose robotic systems with rapidly improving capabilies. 
+Robotic foundation models like VLAs and WAMs have exhibited especially impressive generalization capabilities, inheriting from the internet scale pretraing of general multimodal foundation models.
+Although frontier model weights and architectures are often open-sourced, training, fine tuning, or even just inferencing them can be incredibly costly and inaccesible for smaller labs or hobbyists without access to cutting edge server scale compute.
+
+One recent example of a State of the art World Action Model is DreamZero, which at the time of writing is the top performing robotic policy on RobotArena. DreamZero has exhibitted exceptionally data efficient training and cross embodiment transfer, alongside robust performance in unseen environments and tasks. However, the model relies on an extremely heavyweight 23 billion parameter diffusion transformer, and only manages to operate at 7hz on cutting edge server hardware (GB200, H100 gpus) desite considerable optimizations. Although this kind of compute access may be feasible for large labs, the model is impossible to run on currently available consumer hardware.
+
+DreamZero is just one example, but most other World Action Models also utilize large video diffusion backbones \cite{MimicVideo}. Although this allows them to inherit rich dynamics priors from video pre training, it leads to the previously mentioned issues with inaccesible model size. 
+
+This has recently been addressed by \cite{LeWorldModel} and other JEPA models more generally. Arguably, models that try to reconstruct dense pixel representations waste parameters encoding visual information that isnt relevant to robotic manipulation tasks. This is further supported by the fact that DreamZero and MimicVideo are able to acheive negligible performance losses, or even performance gains, by only partially denoising future video frames. This suggests that the specific visual details of future frames are not all that important for model performance. 
+
+Additionally, recent works like SmolVLA have shown that it is possible to train both competitive and generalizable robotic policies at a small scale. This approach has enabled VLA training and inference on consumer hardware, improving the accessibility of robot learning research. However, to the best of our knowledge, this small scale approach has not yet been replicated in World Action Models.
+
+Combining these ideas, we beleive that WAMs can be made both accessible and competitive by utilizing distilled backbones and adopting a latent space prediction training objective. 
+
+% will need to refine this heavily, a lot could maybe be moved to a literature review / related works section
+
+% feedback: make more concise, don't restate the low accesibility point multiple times, make it one paragraph and move onto other points

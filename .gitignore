@@ -220,6 +220,8 @@ weights/
 *.run.xml
 *.synctex.gz
 *.pdf
+*/main.out
 
 data/
 runs/
+*/dreamzero_tex

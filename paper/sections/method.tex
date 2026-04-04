@@ -2,44 +2,34 @@
 
 \subsection{Overview}
 
-LeWAM consists of three components: (1) a \textbf{visual encoder} that maps video frames to per-patch latent embeddings; (2) a \textbf{flow-matching DiT} that predicts future latent embeddings conditioned on past frames and a language instruction; and (3) an \textbf{Inverse Dynamics Model (IDM)} that decodes an action chunk from the past and predicted future embeddings.
+LeWAM consists of three components: (1) a \textbf{video encoder} that maps video frames to per-patch latent embeddings; (2) a \textbf{flow-matching DiT} that predicts future latent embeddings and actions conditioned on past frames; and (3) a VLM for visually aware language conditioning. 
 Figure~\ref{fig:arch} illustrates the full system.
 
 \begin{figure}[h]
     \centering
     \resizebox{\textwidth}{!}{\input{architecture.tex}}
-    \caption{LeWAM architecture. The V-JEPA~2 encoder maps input frames to patch embeddings. The DiT predicts future patch embeddings via flow matching, conditioned on past frames and a language instruction from a frozen T5Gemma encoder. The IDM cross-attends to current and predicted future patches to produce an action chunk.}
+    \caption{LeWAM architecture.}
     \label{fig:arch}
 \end{figure}
 
 %---------------------------------------
 
-\subsection{Visual Encoder}
+\subsection{Video Encoder}
 
-We use V-JEPA~2.1~\citep{vjepa2_1} ViT-L as our visual encoder. The encoder is initialized from the V-JEPA~2.1 pretrained weights and is \emph{not} frozen during training; gradients flow through it from both the DiT and IDM losses.
+We use V-JEPA~2.1~\citep{vjepa2_1} ViT-B as our visual encoder. The encoder is initialized from the V-JEPA~2.1 pretrained weights and is frozen during training. V-JEPA2 has shown very strong tranfer learning properties.
 
 %---------------------------------------
 
-\subsection{Language Encoder}
+\subsection{Vision Language Encoder}
 
-We use T5Gemma-S~\citep{T5Gemma} for its compact size (270M parameters) and text-only design, using only the encoder to obtain instruction embeddings. During training, the language conditioning is dropped with probability $p_{\text{drop}} = 0.15$ to enable classifier-free guidance at inference time \cite{DreamZero}. TODO is classifier-free guidance even important in robotics?
+We use SmolVLM2-256M for its compact size and for a consist reference point with SmolVLA. During training, the language conditioning is dropped with probability $p_{\text{drop}} = 0.15$ to enable classifier-free guidance at inference time \cite{DreamZero}. TODO is classifier-free guidance even important in robotics?
 
 %---------------------------------------
 
 \subsection{Latent Predictor: Flow-Matching DiT}
 
-Given the current patch embeddings $z_{\text{cur}} \in \mathbb{R}^{T H_p W_p \times D_{\text{enc}}}$, the DiT predicts the patch embeddings of $K$ future frames $z_{\text{fut}} \in \mathbb{R}^{K H_p W_p \times D_{\text{enc}}}$.
+Given the patch embeddings for $P$ past frames $z_{\text{past}} \in \mathbb{R}^{P H_p W_p \times D_{\text{enc}}}$, the DiT predicts the patch embeddings of $F$ future frames $z_{\text{fut}} \in \mathbb{R}^{F H_p W_p \times D_{\text{enc}}}$ and $A$ future actions.
 
-\paragraph{Flow matching objective.}
-We define a linear interpolation between a noise sample $x_0 \sim \mathcal{N}(0, I)$ and the ground-truth future embeddings $z_{\text{fut}}$:
-\begin{equation}
-    x_t = (1 - t)\, x_0 + t\, z_{\text{fut}}, \quad t \sim \mathcal{U}[0, 1].
-\end{equation}
-The DiT is trained to predict the velocity field $v^* = z_{\text{fut}} - x_0$:
-\begin{equation}
-    \mathcal{L}_{\text{pred}} = \mathbb{E}_{t,\, x_0}\left[\left\| v_\theta(x_t,\, t,\, z_{\text{cur}},\, l,\, s) - (z_{\text{fut}} - x_0) \right\|^2\right],
-\end{equation}
-where $l$ denotes the language token sequence and $s \in \mathbb{R}^{D_s}$ is the proprioceptive state.
 
 \paragraph{Architecture.}
 \begin{enumerate}

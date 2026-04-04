@@ -1,0 +1,21 @@
+model_config: configs/model/baby.yaml
+run_tag: null
+
+steps: 50000
+effective_batch_size: 1
+base_batch_size: 64
+lr: 1.0e-4
+warmup_steps: 50
+crop_size: 224
+num_workers: 4
+save_every: 10
+small_dataset: true
+resume: null
+s3_path: s3://zima-data/lewam/checkpoints
+scaled_fps: 10
+action_fps: 30
+overfit_test: true
+timezone: Europe/Zurich
+action_weight: 1.0
+lang_drop_rate: 0.1
+force_batch_size: 1

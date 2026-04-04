@@ -24,7 +24,7 @@ class SIGReg(nn.Module):
 
     def forward(self, embeddings):
         """embeddings: (B, T, D)"""
-        proj = embeddings.transpose(0, 1) #T, B, D
+        proj = embeddings.transpose(0, 1).to(self.dtype)  # T, B, D
         A = torch.randn(proj.size(-1), self.num_proj, device=proj.device, dtype=self.dtype)
         A = A.div_(A.norm(p=2, dim=0))
         x_t = (proj @ A).unsqueeze(-1) * self.t

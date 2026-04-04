@@ -1,0 +1,21 @@
+model_config: configs/model/base.yaml
+run_tag: full-dataset-base-model-apr4
+
+steps: 25000
+effective_batch_size: 96
+base_batch_size: 96
+lr: 1.0e-4
+warmup_steps: 100
+crop_size: 224
+num_workers: 10
+save_every: 50
+small_dataset: false
+resume: runs/full-dataset-base-model-apr4/full-dataset-base-model-apr4_latest.pt
+s3_path: s3://zima-data/lewam/checkpoints
+scaled_fps: 5
+action_fps: 30
+overfit_test: false
+timezone: Europe/Zurich
+action_weight: 1.0
+lang_drop_rate: 0.1
+force_batch_size: null

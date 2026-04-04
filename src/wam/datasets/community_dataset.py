@@ -36,12 +36,12 @@ class CommunityDataset:
         cache_root: str | Path | None = None,
         revision: str = "main",
     ):
-        """Download the full dataset to local storage. Run once before training."""
+        """Download the full dataset to local storage. Skips if data already present."""
         from huggingface_hub import snapshot_download
         base = Path(cache_root) if cache_root else HF_LEROBOT_HOME
         local_dir = base / repo_id
-        if local_dir.exists():
-            print(f"Dataset already exists at {local_dir}, skipping download.")
+        if local_dir.exists() and any(local_dir.rglob("*.parquet")):
+            print(f"Dataset already present at {local_dir}, skipping download.")
             return
         local_dir.mkdir(exist_ok=True, parents=True)
         print(f"Downloading {repo_id} to {local_dir} ...")

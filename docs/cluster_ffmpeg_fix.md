@@ -1,6 +1,6 @@
 # torchcodec FFmpeg fix (cluster)
 
-torchcodec requires FFmpeg shared libraries. The cluster has all FFmpeg 4 libs except `libavdevice.so.58`. Fix:
+torchcodec requires FFmpeg shared libraries. The euler cluster has all FFmpeg 4 libs except `libavdevice.so.58`. Fix:
 
 ```bash
 gcc -shared -fPIC -o .venv/lib/libavdevice.so.58 -x c /dev/null

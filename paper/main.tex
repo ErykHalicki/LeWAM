@@ -20,7 +20,7 @@
 \definecolor{cpurple}{HTML}{9B6BBE}
 \definecolor{cgray}{HTML}{7F8C8D}
 
-\title{LeWAM: A JEPA-based World Action Model}
+\title{LeWAM: A Compact Latent-Space World-Action Model}
 
 \author{
   Eryk Halicki\\
@@ -33,13 +33,11 @@
 \maketitle
 
 \begin{abstract}
-    World Action Models (WAMs) that jointly predict future video latents and decode actions from those predictions have recently shown strong zero-shot generalization across robot embodiments\cite{DreamZero}\cite{MimicVideo}.
-However, existing WAMs rely on large-scale compute infrastructure that is inaccessible to most researchers.
-We present \textbf{LeWAM}, a compact World Action Model designed to run on consumer hardware.
-LeWAM combines a frozen-pretrained V-JEPA2 video encoder with a lightweight flow-matching Diffusion Transformer (DiT) that predicts future patch embeddings in latent space, and an Inverse Dynamics Model (IDM) that decodes action chunks from the predicted transitions.
-The separation of video prediction and action decoding allows the DiT to be pretrained on unlabeled internet video, and the IDM to be finetuned independently on small robot datasets.
-We apply Sketched Isotropic Gaussian Regularization (SIGReg)~\citep{LeJEPA,LeWorldModel} to stabilize JEPA training and train on the SmolVLA community dataset~\citep{SmolVLA}.
-Despite operating at a fraction of the parameter count of prior WAMs, LeWAM achieves competitive performance on [TODO: benchmark], demonstrating that strong video-conditioned action prediction does not require server-scale compute.
+    World Action Models (WAMs) that jointly predict future video and robot actions have recently shown strong zero-shot generalization across robot embodiments and unseen situations\cite{DreamZero}\cite{MimicVideo}.
+However, existing WAMs rely on large video diffusion models that require server-scale compute infrastructure which is inaccessible to most researchers, and completely inaccessible to the open-source community.
+In an effort to improve open access to robot learning research, we present \textbf{LeWAM}, a compact Latent-Space World-Action Model designed to run on consumer hardware and trained on open-source, community collected robot data.
+LeWAM combines a distilled V-JEPA2 video encoder with SmolVLM and a flow-matching Diffusion Transformer (DiT) that jointly predicts future video latents and corresponding actions.
+Despite operating at a fraction of the parameter count, dataset size, and training budget of previous WAMs, LeWAM achieves ... [TODO: will it even work?], demonstrating that strong video-conditioned action prediction does not require server-scale compute.
 \end{abstract}
 
 \keywords{World Action Model, Robot Learning, Flow Matching, Efficient Inference, Video Prediction}

@@ -5,13 +5,13 @@ Reads action/state columns directly from parquet files — no DataLoader overhea
 
 Saves to $LE_WAM_ROOT/.cache/<repo_id>/norm_stats.pt as:
     {
-        'rel_action': {'p2': Tensor[6], 'p98': Tensor[6], 'mean': Tensor[6], 'std': Tensor[6]},
-        'state':      {'p2': Tensor[6], 'p98': Tensor[6], 'mean': Tensor[6], 'std': Tensor[6]},
+        'rel_action': {'q1': ..., 'q5': Tensor[6], 'q95': ..., 'q99': Tensor[6], 'mean': Tensor[6], 'std': Tensor[6]},
+        'state':      {'q1': ..., 'q5': Tensor[6], 'q95': ..., 'q99': Tensor[6], 'mean': Tensor[6], 'std': Tensor[6]},
     }
 
 Run:
     source .venv/bin/activate
-    python src/wam/scripts/precompute_norm_stats.py
+    python src/wam/training/scripts/precompute_norm_stats.py
 """
 
 import argparse
@@ -28,7 +28,8 @@ from wam.datasets.community_dataset import CommunityDataset
 def precompute_norm_stats(
     repo_id: str,
     cache_root: str | Path,
-    tubelet_size: int = 2,
+    action_fps: int = 30,
+    native_fps: int = 30,
     max_samples: int | None = None,
 ) -> Path:
     cache_root = Path(cache_root)
@@ -59,8 +60,10 @@ def precompute_norm_stats(
         states  = np.stack(df["observation.state"].values).astype(np.float32) # (N, 6)
         ep_idx  = df["episode_index"].values
 
-        mask        = ep_idx[tubelet_size:] == ep_idx[:-tubelet_size]
-        rel_actions = (actions[tubelet_size:] - actions[:-tubelet_size])[mask]
+        stride      = native_fps // action_fps
+        dt          = stride / native_fps
+        mask        = ep_idx[stride:] == ep_idx[:-stride]
+        rel_actions = ((actions[stride:] - actions[:-stride]) / dt)[mask]
 
         all_rel_actions.append(rel_actions)
         all_states.append(states)
@@ -76,12 +79,12 @@ def precompute_norm_stats(
     state_data      = torch.from_numpy(np.concatenate(all_states,      axis=0))
 
     def compute_stats(data: torch.Tensor) -> dict:
-        p5      = torch.quantile(data, 0.05, dim=0)
-        p95     = torch.quantile(data, 0.95, dim=0)
-        clipped = torch.maximum(torch.minimum(data, p95), p5)
-        mean    = clipped.mean(dim=0)
-        std     = clipped.std(dim=0).clamp(min=1e-6)
-        return {"p5": p5, "p95": p95, "mean": mean, "std": std}
+        quantiles = {}
+        for q in list(range(1, 6)) + list(range(95, 100)):
+            quantiles[f"q{q}"] = torch.quantile(data, q / 100.0, dim=0)
+        quantiles["mean"] = data.mean(dim=0)
+        quantiles["std"] = data.std(dim=0).clamp(min=1e-6)
+        return quantiles
 
     stats = {
         "rel_action": compute_stats(rel_action_data),
@@ -91,7 +94,7 @@ def precompute_norm_stats(
     torch.save(stats, out_path)
     print(f"Saved norm stats to {out_path}")
     for key, s in stats.items():
-        print(f"  {key}  p5={[f'{v:.4f}' for v in s['p5'].tolist()]}  p95={[f'{v:.4f}' for v in s['p95'].tolist()]}  mean={[f'{v:.4f}' for v in s['mean'].tolist()]}  std={[f'{v:.4f}' for v in s['std'].tolist()]}")
+        print(f"  {key}  q1={[f'{v:.4f}' for v in s['q1'].tolist()]}  q99={[f'{v:.4f}' for v in s['q99'].tolist()]}  mean={[f'{v:.4f}' for v in s['mean'].tolist()]}  std={[f'{v:.4f}' for v in s['std'].tolist()]}")
     return out_path
 
 
@@ -99,7 +102,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-id",       type=str, default="ehalicki/LeWAM_community_dataset")
     parser.add_argument("--max-samples",   type=int, default=None)
-    parser.add_argument("--tubelet-size",  type=int, default=2)
+    parser.add_argument("--action-fps",    type=int, default=30)
+    parser.add_argument("--native-fps",    type=int, default=30)
     parser.add_argument("--sanity-check",  action="store_true")
     args = parser.parse_args()
 
@@ -111,6 +115,7 @@ if __name__ == "__main__":
     precompute_norm_stats(
         repo_id=repo_id,
         cache_root=Path(le_wam_root) / ".cache",
-        tubelet_size=args.tubelet_size,
+        action_fps=args.action_fps,
+        native_fps=args.native_fps,
         max_samples=args.max_samples,
     )

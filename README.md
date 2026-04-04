@@ -1,6 +1,6 @@
 # LeWorldActionModel (LeWAM)
 
-A video world action model built on VJEPA2 patch embeddings. A flow-matching DiT predicts future video latents conditioned on past frames and language, and a transformer IDM decodes action chunks from the predicted transitions. The separation lets the DiT pretrain on unlabeled internet video and the IDM finetune independently on robot data.
+A joint video-action world model built on [VJEPA2](https://github.com/facebookresearch/vjepa2) latents. A single flow-matching DiT jointly predicts future video latents and action trajectories, conditioned on context frames, proprioceptive state, and language instructions from a frozen VLM. Block-causal attention lets video and action tokens attend to aligned temporal chunks while staying autoregressive across time.
 
 Inspired by [LeWorldModel](https://arxiv.org/pdf/2603.19312v1) and [DreamZero](https://dreamzero.github.io).
 
@@ -10,12 +10,20 @@ Inspired by [LeWorldModel](https://arxiv.org/pdf/2603.19312v1) and [DreamZero](h
 
 ## Components
 
-| Component | Model | Params | Frozen |
-|-----------|-------|--------|--------|
-| Visual encoder | [VJEPA2](https://github.com/facebookresearch/vjepa2) ViT-L | 80M | No |
-| Language encoder | [T5Gemma-S](https://huggingface.co/google/t5gemma-s-s-prefixlm) | 270M | Yes |
-| Latent predictor | Flow-matching DiT | ~[TBD]M | No |
-| Action decoder | Transformer IDM | ~[TBD]M | No |
+| Component | Model | Frozen |
+|-----------|-------|--------|
+| Visual encoder | [VJEPA2](https://github.com/facebookresearch/vjepa2) ViT-B | Yes |
+| Language encoder | [SmolVLM2-256M](https://huggingface.co/HuggingFaceTB/SmolVLM2-256M-Video-Instruct) | Yes |
+| Flow-matching DiT | LeWAM (joint video + action) | No |
+
+### Model sizes
+
+| Size | Dim | Depth | Heads | Context frames | Future frames |
+|------|-----|-------|-------|----------------|---------------|
+| Baby | 256 | 6 | 4 | 4 | 2 |
+| Small | 512 | 8 | 8 | 4 | 2 |
+| Base | 512 | 12 | 8 | 32 | 8 |
+| Large | 1024 | 16 | 16 | 32 | 8 |
 
 ---
 
@@ -23,18 +31,30 @@ Inspired by [LeWorldModel](https://arxiv.org/pdf/2603.19312v1) and [DreamZero](h
 
 ```
 LeWAM/
+├── configs/
+│   ├── model/                  # model size configs (baby, small, base, large)
+│   └── train/                  # training configs
 ├── src/
 │   ├── wam/
 │   │   ├── models/
-│   │   │   ├── DiT.py        # flow-matching latent predictor
-│   │   │   ├── IDM.py        # inverse dynamics model
-│   │   │   ├── common.py     # shared primitives (RoPE3D, attention blocks)
-│   │   │   └── losses.py     # SIGReg anti-collapse regularizer
-│   │   └── scripts/tests/    # dev / loading scripts
-│   └── vjepa2/               # VJEPA2 encoder (git submodule)
-├── tests/                    # pytest suite
-├── weights/                  # model checkpoints (not committed)
-├── paper/                    # LaTeX source
+│   │   │   ├── lewam.py        # joint video-action flow-matching DiT
+│   │   │   ├── common.py       # shared primitives (3D RoPE, attention blocks)
+│   │   │   ├── action_encoders.py  # state/action encoding and normalization
+│   │   │   ├── video_encoder.py    # VJEPA2 encoder wrapper
+│   │   │   └── vlm_encoder.py     # SmolVLM2 language encoder
+│   │   ├── training/
+│   │   │   ├── scripts/
+│   │   │   │   ├── train.py                # main training script (Accelerate)
+│   │   │   │   ├── precompute_norm_stats.py # action/state normalization stats
+│   │   │   │   ├── plot_losses.py          # loss curve visualization
+│   │   │   │   └── model_sizes.py          # print model param counts
+│   │   │   ├── common.py       # training utilities, ODE visualization, S3 helpers
+│   │   │   └── losses.py       # loss functions
+│   │   ├── datasets/           # dataset loaders
+│   │   └── scripts/            # dev scripts and tests
+│   └── vjepa2/                 # VJEPA2 encoder (git submodule)
+├── tests/                      # pytest suite
+├── paper/                      # LaTeX source
 └── docs/
 ```
 
@@ -42,32 +62,41 @@ LeWAM/
 
 ## Datasets
 
-- [LeWAM community dataset](https://huggingface.co/datasets/ehalicki/LeWAM_community_dataset) — robot finetuning
-- [SomethingSomethingV2](https://huggingface.co/datasets/HuggingFaceM4/something_something_v2) — experiments and video pretraining
+- [LeWAM community dataset](https://huggingface.co/datasets/ehalicki/LeWAM_community_dataset) -- full training set
+- [LeWAM community dataset (small)](https://huggingface.co/datasets/ehalicki/LeWAM_community_dataset_small) -- small subset for overfitting tests
 
 ---
 
 ## Setup
 
 ```bash
-export HF_TOKEN={YOUR_TOKEN} # this is needed to be able to install the Gemmma encoder
-
 git clone --recurse-submodules https://github.com/ErykHalicki/LeWAM
 cd LeWAM
+export LE_WAM_ROOT=$(pwd)
+
 ./src/wam/scripts/init/install_and_test.sh
-./src/wam/scripts/init/download_somethingsomethingv2.sh
 ```
+
+## Training
+
+```bash
+accelerate launch src/wam/training/scripts/train.py --config configs/train/default.yaml
+```
+
+Training configs control dataset, fps, action fps, batch size, and other hyperparameters. Model configs control architecture size. Norm stats are precomputed automatically at the start of each run.
+
+Checkpoints and loss logs are saved locally to `$LE_WAM_ROOT/runs/` and optionally uploaded to S3.
 
 ---
 
 ## Environment Variables
 
-Add the following to your `~/.bashrc`:
+Add the following to your shell profile:
 
 ```bash
 export LE_WAM_ROOT=/path/to/LeWAM
 export HF_TOKEN=your_huggingface_token
 ```
 
-- `LE_WAM_ROOT`: Used by dataset download scripts to determine where to place data files
-- `HF_TOKEN`: Required for downloading the Gemma encoder from HuggingFace
+- `LE_WAM_ROOT`: Root directory for configs, caches, weights, and run outputs
+- `HF_TOKEN`: Required for downloading models from HuggingFace

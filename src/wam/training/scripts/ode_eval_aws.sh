@@ -1,1 +1,0 @@
-python src/wam/training/scripts/eval_ode_steps.py --model "LeWAM-v0.1_ssv2_pretraining_frozen_encoder_DiT-B_no-IDM/LeWAM-v0.1_ssv2_pretraining_frozen_encoder_DiT-B_no-IDM_latest.pt" --from-aws --s3-path "s3://zima-data/lewam/checkpoints"
