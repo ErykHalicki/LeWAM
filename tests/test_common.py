@@ -1,6 +1,6 @@
 import pytest
 import torch
-from wam.models.common import (
+from lewam.models.common import (
     Block, RoPE3D, SelfAttention, CrossAttention,
     PatchPositionIds,
     make_video_pos_ids, make_action_pos_ids, concat_pos_ids,

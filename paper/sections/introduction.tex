@@ -1,19 +1,14 @@
 \section{Introduction}
 
-Over the last decade, the field of robot learning has seen explosive growth, equipping general purpose robotic systems with rapidly improving capabilies. 
-Robotic foundation models like VLAs and WAMs have exhibited especially impressive generalization capabilities, inheriting from the internet scale pretraing of general multimodal foundation models.
-Although frontier model weights and architectures are often open-sourced, training, fine tuning, or even just inferencing them can be incredibly costly and inaccesible for smaller labs or hobbyists without access to cutting edge server scale compute.
+World Action Models (WAMs) have recently emerged as a powerful paradigm for robot learning, jointly predicting future video and robot actions from a shared dynamics model.
+By inheriting rich dynamics priors from internet-scale video pretraining, WAMs like DreamZero~\cite{DreamZero} and MimicVideo~\cite{MimicVideo} achieve remarkably data-efficient training and strong zero-shot generalization across embodiments, environments, and tasks.
+However, these models rely on heavyweight video diffusion backbones with tens of billions of parameters, requiring server-scale compute (GB200, H100 GPUs) for both training and inference, placing them out of reach for smaller labs and the open-source robotics community.
 
-One recent example of a State of the art World Action Model is DreamZero, which at the time of writing is the top performing robotic policy on RobotArena. DreamZero has exhibitted exceptionally data efficient training and cross embodiment transfer, alongside robust performance in unseen environments and tasks. However, the model relies on an extremely heavyweight 23 billion parameter diffusion transformer, and only manages to operate at 7hz on cutting edge server hardware (GB200, H100 gpus) desite considerable optimizations. Although this kind of compute access may be feasible for large labs, the model is impossible to run on currently available consumer hardware.
+This reliance on pixel-space video diffusion may be unnecessary.
+DreamZero and MimicVideo both achieve negligible performance loss, or even performance gains, when only partially denoising future video frames, suggesting that fine-grained visual details contribute little to action prediction.
+This observation is consistent with JEPA-style models~\cite{vjepa2_1, LeWorldModel}, which show that predicting in the latent space of a video encoder is far more compute-efficient than pixel-space reconstruction while retaining the dynamics information relevant to downstream tasks.
+Separately, SmolVLA~\cite{SmolVLA} has demonstrated that competitive and generalizable robot policies can be trained at small scale on consumer hardware. However, to our knowledge, this accessibility has not yet been achieved for World Action Models.
 
-DreamZero is just one example, but most other World Action Models also utilize large video diffusion backbones \cite{MimicVideo}. Although this allows them to inherit rich dynamics priors from video pre training, it leads to the previously mentioned issues with inaccesible model size. 
-
-This has recently been addressed by \cite{LeWorldModel} and other JEPA models more generally. Arguably, models that try to reconstruct dense pixel representations waste parameters encoding visual information that isnt relevant to robotic manipulation tasks. This is further supported by the fact that DreamZero and MimicVideo are able to acheive negligible performance losses, or even performance gains, by only partially denoising future video frames. This suggests that the specific visual details of future frames are not all that important for model performance. 
-
-Additionally, recent works like SmolVLA have shown that it is possible to train both competitive and generalizable robotic policies at a small scale. This approach has enabled VLA training and inference on consumer hardware, improving the accessibility of robot learning research. However, to the best of our knowledge, this small scale approach has not yet been replicated in World Action Models.
-
-Combining these ideas, we beleive that WAMs can be made both accessible and competitive by utilizing distilled backbones and adopting a latent space prediction training objective. 
-
-% will need to refine this heavily, a lot could maybe be moved to a literature review / related works section
-
-% feedback: make more concise, don't restate the low accesibility point multiple times, make it one paragraph and move onto other points
+We present \textbf{LeWAM}, a compact latent-space World-Action Model that combines these ideas.
+LeWAM uses a frozen V-JEPA~2~\cite{vjepa2_1} encoder as its visual backbone, SmolVLM2~\cite{SmolVLM2, SmolVLA} for language conditioning, and a flow-matching Diffusion Transformer (DiT) that jointly denoises future video latents and action trajectories in a single forward pass, following the joint denoising formulation of DreamZero~\cite{DreamZero}.
+By operating entirely in latent space and sharing a single transformer across both prediction targets, LeWAM operates at a fraction of the parameter count, dataset size, and training budget of previous WAMs while remaining trainable and deployable on consumer hardware.

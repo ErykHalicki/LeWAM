@@ -13,9 +13,9 @@ import numpy as np
 from PIL import Image
 from torchvision.transforms import v2 as transforms
 
-from wam.datasets.community_dataset import CommunityDataset
-from wam.models.video_encoder import build_vjepa2_encoder_arch, load_vjepa2_encoder
-from wam.training.common import embed_pca_rgb
+from lewam.datasets.community_dataset import CommunityDataset
+from lewam.models.video_encoder import build_vjepa2_encoder_arch, load_vjepa2_encoder
+from lewam.training.common import embed_pca_rgb
 
 PATCH_SIZE = 16
 TUBELET_SIZE = 2
@@ -132,9 +132,11 @@ def main():
         indices = [0, n_tubelets // 2, n_tubelets - 1]
         for ti in indices:
             img = (pca_frames[ti] * 255).clip(0, 255).astype(np.uint8)
-            Image.fromarray(img).save(
-                os.path.join(out_dir, f"pca_{phase}_t{ti}.png")
+            pil_img = Image.fromarray(img)
+            pil_img = pil_img.resize(
+                (pil_img.width * 8, pil_img.height * 8), Image.Resampling.NEAREST
             )
+            pil_img.save(os.path.join(out_dir, f"pca_{phase}_t{ti}.png"))
             print(f"  pca_{phase}_t{ti}.png")
 
     print(f"\nAll figures saved to {out_dir}")

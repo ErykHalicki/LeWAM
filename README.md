@@ -35,7 +35,7 @@ LeWAM/
 │   ├── model/                  # model size configs (baby, small, base, large)
 │   └── train/                  # training configs
 ├── src/
-│   ├── wam/
+│   ├── lewam/
 │   │   ├── models/
 │   │   │   ├── lewam.py        # joint video-action flow-matching DiT
 │   │   │   ├── common.py       # shared primitives (3D RoPE, attention blocks)
@@ -72,31 +72,59 @@ LeWAM/
 ```bash
 git clone --recurse-submodules https://github.com/ErykHalicki/LeWAM
 cd LeWAM
-export LE_WAM_ROOT=$(pwd)
+source src/lewam/scripts/init/install.sh
+```
 
-./src/wam/scripts/init/install_and_test.sh
+On vast.ai (or any environment with an existing venv), skip venv creation:
+
+```bash
+source src/lewam/scripts/init/install.sh --external-venv
+```
+
+If resuming from a checkpoint (V-JEPA2 weights already baked in), skip the ~1GB download:
+
+```bash
+source src/lewam/scripts/init/install.sh --no-vjepa
 ```
 
 ## Training
 
+### Pretraining from scratch (community dataset)
+
 ```bash
-accelerate launch src/wam/training/scripts/train.py --config configs/train/default.yaml
+accelerate launch src/lewam/training/scripts/train.py \
+    --config configs/train/pretrain.yaml
 ```
 
-Training configs control dataset, fps, action fps, batch size, and other hyperparameters. Model configs control architecture size. Norm stats are precomputed automatically at the start of each run.
+### Finetuning on a single LeRobot dataset
 
-Checkpoints and loss logs are saved locally to `$LE_WAM_ROOT/runs/` and optionally uploaded to S3.
+```bash
+accelerate launch src/lewam/training/scripts/train.py \
+    --config configs/train/finetune.yaml
+```
+
+### Resuming a training run
+
+```bash
+accelerate launch src/lewam/training/scripts/train.py \
+    --config configs/train/finetune_resume.yaml
+```
+
+Training configs control dataset, fps, action fps, batch size, and other hyperparameters. Model configs control architecture size. Norm stats are computed automatically at the start of each run.
+
+Checkpoints and loss logs are saved to `$LE_WAM_ROOT/.cache/<run_tag>/` and optionally uploaded to S3. If a checkpoint is not found locally, it is automatically downloaded from S3.
 
 ---
 
 ## Environment Variables
 
-Add the following to your shell profile:
+The install script sets `LE_WAM_ROOT` automatically. If needed, add the following to your shell profile:
 
 ```bash
 export LE_WAM_ROOT=/path/to/LeWAM
 export HF_TOKEN=your_huggingface_token
 ```
 
-- `LE_WAM_ROOT`: Root directory for configs, caches, weights, and run outputs
+- `LE_WAM_ROOT`: Root directory for configs, caches, and run outputs
 - `HF_TOKEN`: Required for downloading models from HuggingFace
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`: Required for S3 checkpoint sync

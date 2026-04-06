@@ -10,7 +10,7 @@ crop_size: 224
 num_workers: 10
 save_every: 50
 small_dataset: false
-resume: runs/full-dataset-base-model-apr4/full-dataset-base-model-apr4_latest.pt
+resume: full-dataset-base-model-apr4/full-dataset-base-model-apr4_latest.pt
 s3_path: s3://zima-data/lewam/checkpoints
 scaled_fps: 5
 action_fps: 30
@@ -19,3 +19,7 @@ timezone: Europe/Zurich
 action_weight: 1.0
 lang_drop_rate: 0.1
 force_batch_size: null
+restart: false
+gradient_checkpointing: false
+backup_every: 500
+no_compile: false

@@ -19,3 +19,7 @@ timezone: Europe/Zurich
 action_weight: 1.0
 lang_drop_rate: 0.1
 force_batch_size: 1
+restart: true
+gradient_checkpointing: false
+backup_every: null
+no_compile: false

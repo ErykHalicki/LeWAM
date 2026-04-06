@@ -19,3 +19,4 @@ timezone: Europe/Zurich
 action_weight: 1.0
 lang_drop_rate: 0.1
 force_batch_size: null
+no_compile: false

@@ -1,6 +1,6 @@
 import torch
 import pytest
-from wam.training.losses import SIGReg
+from lewam.training.losses import SIGReg
 
 
 @pytest.fixture

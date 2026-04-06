@@ -24,7 +24,7 @@ dependencies = [
     "safetensors>=0.7",
     "tokenizers>=0.22",
     "av>=15.0.0,<16.0.0",
-    "lerobot==0.5.0",
+    "lerobot[feetech] @ git+https://github.com/huggingface/lerobot.git@07502868e58095b437e5dd5a480fecc65a6f29dc",
     "num2words==0.5.14"
 ]
 

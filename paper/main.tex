@@ -14,12 +14,6 @@
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta, positioning, calc}
 
-\definecolor{cblue}{HTML}{4A90D9}
-\definecolor{cgreen}{HTML}{5BAD72}
-\definecolor{corange}{HTML}{E8863A}
-\definecolor{cpurple}{HTML}{9B6BBE}
-\definecolor{cgray}{HTML}{7F8C8D}
-
 \title{LeWAM: A Compact Latent-Space World-Action Model}
 
 \author{
@@ -41,6 +35,13 @@ Despite operating at a fraction of the parameter count, dataset size, and traini
 \end{abstract}
 
 \keywords{World Action Model, Robot Learning, Flow Matching, Efficient Inference, Video Prediction}
+
+\begin{figure}[h]
+    \centering
+    \resizebox{\textwidth}{!}{\input{architecture.tex}}
+    \caption{LeWAM architecture. At training time, the future latent input is linearly interpolated between ground truth and standard Gaussian noise, modulated by the uniformly sampled denoising timestep $t$. The AdaLN layers are modulated by $\tau(t)$ embedding only.}
+    \label{fig:arch}
+\end{figure}
 
 %===============================================================================
 
@@ -75,6 +76,6 @@ Despite operating at a fraction of the parameter count, dataset size, and traini
 \bibliography{ref}
 
 \appendix
-\section{Appendix}
+\input{sections/appendix}
 
 \end{document}

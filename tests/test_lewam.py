@@ -1,6 +1,6 @@
 import pytest
 import torch
-from wam.models.lewam import LeWAM, TimestepEmbedder, FinalLayer
+from lewam.models.lewam import LeWAM, TimestepEmbedder, FinalLayer
 
 
 DIM = 128
@@ -14,6 +14,7 @@ TINY_CFG = dict(
     frame_latent_h=2, frame_latent_w=2, fps=10.0,
     action_dim=6, state_dim=6,
     vlm_model_id=None,
+    norm_stats=LeWAM._dummy_norm_stats(6, 6),
 )
 
 
@@ -60,13 +61,22 @@ class TestFinalLayer:
 
 # ── Attention mask ───────────────────────────────────────────────────────────
 
+def _dense_mask(model):
+    """Get a dense (N, N) bool mask from the model for test assertions."""
+    spatial = model.frame_latent_h * model.frame_latent_w
+    return LeWAM._build_flex_mask(
+        model.N_ctx, model.N_fut, model.N_act, spatial, flex_block_size=1,
+    ).to_dense().squeeze()
+
+
 class TestAttnMask:
     def test_mask_shape(self, model):
         N = model.N_ctx + model.N_fut + model.N_act
-        assert model.attn_mask.shape == (1, 1, N, N)
+        mask = _dense_mask(model)
+        assert mask.shape == (N, N)
 
     def test_context_block_causal(self, model):
-        mask = model.attn_mask.squeeze()
+        mask = _dense_mask(model)
         spatial = model.frame_latent_h * model.frame_latent_w
         bs = 2 * spatial
         num_blocks = model.N_ctx // bs
@@ -77,29 +87,29 @@ class TestAttnMask:
                 assert not mask[r0, r1], f"context block {i} should NOT see next block"
 
     def test_context_blocks_bidirectional_within(self, model):
-        mask = model.attn_mask.squeeze()
+        mask = _dense_mask(model)
         spatial = model.frame_latent_h * model.frame_latent_w
         bs = 2 * spatial
         assert mask[0, bs - 1] and mask[bs - 1, 0], "spatial tokens within a block must be bidirectional"
 
     def test_future_sees_all_context(self, model):
-        mask = model.attn_mask.squeeze()
+        mask = _dense_mask(model)
         C, F = model.N_ctx, model.N_fut
         assert mask[C:C+F, :C].all()
 
     def test_future_sees_corresponding_actions(self, model):
-        mask = model.attn_mask.squeeze()
+        mask = _dense_mask(model)
         C, F, A = model.N_ctx, model.N_fut, model.N_act
         assert mask[C + F - 1, C + F + A - 1], "last future token should see last action"
         assert mask[C, C + F], "first future token should see first action"
 
     def test_actions_see_all_context(self, model):
-        mask = model.attn_mask.squeeze()
+        mask = _dense_mask(model)
         C, F = model.N_ctx, model.N_fut
         assert mask[C+F:, :C].all()
 
     def test_actions_block_causal(self, model):
-        mask = model.attn_mask.squeeze()
+        mask = _dense_mask(model)
         C, F, A = model.N_ctx, model.N_fut, model.N_act
         action_block = mask[C+F:, C+F:]
         assert action_block[0, 0], "first action should see itself"
@@ -107,7 +117,7 @@ class TestAttnMask:
         assert action_block[A-1, 0], "last action should see first action"
 
     def test_future_block_causal(self):
-        m = LeWAM._build_attn_mask(N_ctx=4, N_fut=6, N_act=2, spatial=1, block_size=2).squeeze()
+        m = LeWAM._build_flex_mask(N_ctx=4, N_fut=6, N_act=2, spatial=1, block_size=2, flex_block_size=1).to_dense().squeeze()
         C, F, bs = 4, 6, 2
         num_fut_blocks = F // bs
         for i in range(num_fut_blocks):
@@ -118,7 +128,7 @@ class TestAttnMask:
 
     @pytest.mark.parametrize("C,F,A,bs", [(4, 6, 2, 2), (8, 8, 4, 2), (0, 4, 4, 1)])
     def test_mask_self_attendance(self, C, F, A, bs):
-        mask = LeWAM._build_attn_mask(C, F, A, spatial=1, block_size=bs).squeeze()
+        mask = LeWAM._build_flex_mask(C, F, A, spatial=1, block_size=bs, flex_block_size=1).to_dense().squeeze()
         N = C + F + A
         assert mask.shape == (N, N)
         for r in range(N):
@@ -128,15 +138,6 @@ class TestAttnMask:
 # ── Constructor ──────────────────────────────────────────────────────────────
 
 class TestConstructor:
-    def test_from_size(self):
-        m = LeWAM.from_size(
-            "baby",
-            num_context_frames=4, num_future_frames=4,
-            frame_latent_h=2, frame_latent_w=2, fps=10.0,
-            action_dim=6, state_dim=6,
-            vlm_model_id=None,
-        )
-        assert m.model_dim == 256
 
     def test_config_stored(self, model):
         assert model.config["model_dim"] == DIM
@@ -232,7 +233,8 @@ class TestRuntimeConfig:
         old_N = model.N_ctx
         model.set_patch_grid(3, 3)
         assert model.N_ctx != old_N
-        assert model.attn_mask.shape[-1] == model.N_ctx + model.N_fut + model.N_act
+        mask = _dense_mask(model)
+        assert mask.shape[-1] == model.N_ctx + model.N_fut + model.N_act
 
     def test_set_patch_grid_forward_still_works(self, model):
         model.set_patch_grid(3, 3)

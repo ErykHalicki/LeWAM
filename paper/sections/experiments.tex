@@ -1,3 +1,25 @@
 \section{Experiments}
 
 [TODO]
+
+%- first training run 
+%    - 16.8s per step, 18k steps, 64 batch
+%    - rtx 6000s on vast.ai
+%    - pretraining on communoty dataset
+%    - 1.0 action loss weight
+%    - no competent behaviour in rollout
+
+%- second training run:
+%    - 5.5 sec per step, 10k steps, ~15x4=60 gpu hours (4gpus), 64 batch
+%    - 4x5090 on vast.ai
+%    - fine tuning on multi task dataset on my So101
+%    - 2.0 action weight 
+%    - overfitting to tasks
+%    - more robot like motions, but no task success
+%
+%- third training run:
+%    - 12 sec per step 5k steps 16x4=64 gpu hours, 240 batch
+%    - 4x5080 on vast.ai 
+%    - fine tuning on multi task dataset, with 60 more episodes than trainnig run 2
+%    - 2.0 action weight
+%    - 0.5% success rate, managed to pick up a cube twice over the course of an hour

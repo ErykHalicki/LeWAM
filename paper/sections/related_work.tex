@@ -1,24 +1,3 @@
 \section{Related Work}
 
-\paragraph{World Action Models.}
-As shown in DreamZero\cite{DreamZero} and MimicVideo\citet{MimicVideo}, Internet Scale pretraining of video models gives them very strong dynamics priors. This takes the load off of action policies to learn a dynaimcs model, simplifying the learning problem. In practice, these strong dyanimcs priors allow for WAM's to be trained with significantly less robotics data, and enables them to have much stronger generalization to unseen tasks than previous SoTA VLA's.
-
-\paragraph{Video self-supervised learning.}
-V-JEPA~2\citep{vjepa2_1} and LeWorldModel~\citep{LeWorldModel} demonstrate that training predictors in the latent space of a video encoder is substantially more compute-efficient than pixel-space prediction.
-We use the V-JEPA~2 ViT-L encoder as our visual backbone and propagate gradients through it end-to-end.
-
-\paragraph{Stable JEPA training.}
-Sketched Isotropic Gaussian Regularization (SIGReg), introduced in \citet{LeJEPA} and applied in \citet{LeWorldModel}, prevents representational collapse in JEPA-style models without requiring stop-gradient tricks.
-We include SIGReg as an auxiliary loss throughout all training stages to prevent our encoder from collapsing to trivial representations.
-
-\paragraph{Diffusion Transformers and flow matching.}
-DiT~\citep{DiT} established the transformer as a competitive backbone for diffusion models, replacing U-Nets with scalable attention blocks.
-Flow matching~\citep{FlowMatching} offers a simpler and more stable training objective than DDPM-style diffusion by directly regressing the velocity field of a linear interpolation between noise and data.
-We use flow matching with a DiT backbone, conditioning via cross-attention rather than AdaLN-Zero, following \citet{GenTron}.
-
-\paragraph{3D positional encoding.}
-3D-RoPE~\citep{ThreeDRoPE} extends Rotary Position Embeddings to temporal, height, and width axes, enabling length generalization beyond training resolution.
-It is adopted in V-JEPA~2~\citep{vjepa2_1} and DreamZero~\citep{DreamZero}; we apply it to all spatial attention operations in both the DiT and IDM.
-
-\paragraph{Small-scale VLAs.}
-SmolVLA~\citep{SmolVLA} demonstrates that compact vision-language-action models trained with flow matching are competitive with much larger counterparts. [TODO: expand]
+[TODO: ]

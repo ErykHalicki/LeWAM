@@ -2,48 +2,235 @@
 \definecolor{cblue}{HTML}{4A90D9}
 \definecolor{cgreen}{HTML}{5BAD72}
 \definecolor{corange}{HTML}{E8863A}
-\definecolor{cpurple}{HTML}{9B6BBE}
+\definecolor{cpurple}{HTML}{512E78}
 \definecolor{cgray}{HTML}{7F8C8D}
 \definecolor{cred}{HTML}{D9534F}
+
+\newcommand{\snowflake}[1][0.12]{%
+    \tikz[scale=#1, baseline=-0.1em, rotate=30]{
+        \pgfmathsetmacro{\R}{0.35}
+        \pgfmathsetmacro{\L}{0.8}
+        \pgfmathsetmacro{\br}{0.3*\L}
+        \pgfmathsetmacro{\blen}{0.55*\L}
+        \draw[line width=0.65pt, white] (0:{\R}) \foreach \a in {60,120,...,360} {-- (\a:{\R})} -- cycle;
+        \foreach \a in {0,60,...,300} {
+            \draw[line width=0.65pt, line cap=round, white] (\a:{\R}) -- (\a:{\R+\L});
+            \draw[line width=0.65pt, line cap=round, white] (\a:{\R+\br}) -- ++(\a+50:{\blen});
+            \draw[line width=0.65pt, line cap=round, white] (\a:{\R+\br}) -- ++(\a-50:{\blen});
+        }
+    }%
+}
 
 \begin{tikzpicture}[
     module/.style={draw, thick, rounded corners=4pt, minimum height=3em,
                    align=center, font=\footnotesize\sffamily\bfseries},
-    enc/.style={module, fill=cblue!12, draw=cblue!50!black, text=cblue!60!black,
+    enc/.style={module, fill=cgreen!35, draw=cgreen!50!black, text=cgreen!60!black,
                 minimum width=7em},
     lbl/.style={font=\footnotesize\sffamily},
-    sublbl/.style={font=\scriptsize\sffamily, text=cgray!80!black},
-    arr/.style={-{Stealth[length=4pt, width=3pt]}, semithick, color=black!60},
-    op/.style={draw, thick, circle, minimum size=1.8em, inner sep=0pt,
-               font=\small\sffamily\bfseries, fill=white},
-    imgframe/.style={inner sep=1pt, draw=cgray!30, rounded corners=1pt},
+    sublbl/.style={font=\scriptsize\sffamily, text=black},
+    arr/.style={-{Stealth[length=4pt, width=3pt]}, semithick, color=black},
+    op/.style={font=\Large\sffamily, inner sep=2pt},
+    imgframe/.style={inner sep=0pt},
 ]
 
 %% ── Camera 0 stack (top) ──
 \coordinate (c0base) at (0, 0.9);
 \foreach \i/\file in {0/cam0_ctx_f0, 1/cam0_ctx_f8, 2/cam0_ctx_f15} {
     \node[imgframe] at ($(c0base)+(\i*2pt, -\i*2pt)$)
-        (c0f\i) {\includegraphics[width=0.85cm]{figures/generated/\file.png}};
+        (c0f\i) {\includegraphics[width=1.1cm]{figures/generated/\file.png}};
 }
-\node[sublbl, left=2pt of c0f0.west, anchor=east] {Cam 0};
 
-%% ── Camera 1 stack (bottom) ──
+%% ── Dots between cameras ──
+\node[font=\large, text=black] at (0, 0) {$\vdots$};
+
+%% ── Camera C stack (bottom) ──
 \coordinate (c1base) at (0, -0.9);
 \foreach \i/\file in {0/cam1_ctx_f0, 1/cam1_ctx_f8, 2/cam1_ctx_f15} {
     \node[imgframe] at ($(c1base)+(\i*2pt, -\i*2pt)$)
-        (c1f\i) {\includegraphics[width=0.85cm]{figures/generated/\file.png}};
+        (c1f\i) {\includegraphics[width=1.1cm]{figures/generated/\file.png}};
 }
-\node[sublbl, left=2pt of c1f0.west, anchor=east] {Cam 1};
+\node[sublbl, above=6pt of c0f2] {\textbf{Videos} $(\mathbf{I}_{0:C})$};
 
 %% ── Stitch operator ──
-\node[op] at (2.2, 0) (stitch) {$\oplus$};
-\node[sublbl, above=2pt of stitch] {stitch};
+\node[op] at (2.0, 0) (stitch) {$\oplus$};
 
-\draw[arr] (c0f2.east) -- ++(0.3, 0) |- (stitch.west);
-\draw[arr] (c1f2.east) -- ++(0.3, 0) |- (stitch.west);
+\coordinate (vidfork) at ($(c1f2.east)+(0.25, 0)$);
+\draw[semithick] (c0f2.east) -- ++(0.25, 0) |- (vidfork);
+\draw[semithick] (c1f2.east) -- (vidfork);
+\draw[arr] (vidfork) -- (vidfork |- stitch) -- (stitch.west);
 
 %% ── V-JEPA2 ──
-\node[enc, right=1.2cm of stitch, minimum width=7em] (vjepa) {V-JEPA2\\[-2pt]{\scriptsize(frozen)}};
+\node[enc, right=0.6cm of stitch, minimum width=7em] (vjepa) {Video Encoder};
+\node[anchor=north east, inner sep=2pt] at (vjepa.north east) {\snowflake[0.14]};
 \draw[arr] (stitch) -- (vjepa);
+
+%% ── V-JEPA2 output: stacked PCA latents ──
+\coordinate (pcabase) at ($(vjepa.east)+(1.4, 0)$);
+\foreach \i/\file in {0/pca_ctx_t0, 1/pca_ctx_t4, 2/pca_fut_t0, 3/pca_fut_t8} {
+    \node[imgframe] at ($(pcabase)+(\i*2pt, -\i*2pt)$)
+        (pca\i) {\includegraphics[width=2.2cm, interpolate=false]{figures/generated/\file.png}};
+}
+\node[sublbl] at ($(pca0.north)!0.5!(pca3.north)+(0, 12pt)$) {\textbf{Context Latents} $(\mathbf{z}_{0:C})$};
+
+\draw[arr] (vjepa.east) -- (pca0.west);
+
+
+%% ── DiT Block ──
+\node[draw, thick, rounded corners=4pt, fill=corange!20, draw=corange!50!black,
+      minimum width=7em, minimum height=5cm, anchor=north]
+    (ditbox) at ($(pca0 |- vjepa.north)+(3.5, 0)$) {};
+\node[anchor=north west, font=\footnotesize\sffamily\bfseries, text=corange!60!black]
+    at ($(ditbox.north west)+(3pt, -2pt)$) {DiT Block};
+
+\draw[arr] (pca3.east |- pca0) -- (ditbox.west |- pca0);
+
+%% 3D noisy input cuboid (above DiT)
+\node[inner sep=0pt, above=0.4cm of ditbox.north] (noisecube)
+    {\includegraphics[width=2.2cm]{figures/generated/noise_cube.png}};
+\node[sublbl, right=2pt of noisecube] {$\mathcal{N}(0, I)_{C:H}$};
+\draw[arr] (noisecube.south) -- (ditbox.north);
+
+\node[module, fill=corange!10, draw=corange!40, text=corange!60!black,
+      minimum width=5.5em, minimum height=1.4em, font=\tiny\sffamily\bfseries]
+    (adaln1) at ($(ditbox.north)+(0, -1.1)$) {AdaLN};
+\node[module, fill=corange!25, draw=corange!50, text=corange!60!black,
+      minimum width=5.5em, minimum height=1.4em, font=\tiny\sffamily\bfseries,
+      below=0.1cm of adaln1]
+    (dit1) {Self-Attention};
+\node[module, fill=corange!10, draw=corange!40, text=corange!60!black,
+      minimum width=5.5em, minimum height=1.4em, font=\tiny\sffamily\bfseries,
+      below=0.1cm of dit1]
+    (adaln2) {AdaLN};
+\node[module, fill=corange!25, draw=corange!50, text=corange!60!black,
+      minimum width=5.5em, minimum height=1.4em, font=\tiny\sffamily\bfseries,
+      below=0.1cm of adaln2]
+    (dit2) {Cross-Attention};
+\node[module, fill=corange!10, draw=corange!40, text=corange!60!black,
+      minimum width=5.5em, minimum height=1.4em, font=\tiny\sffamily\bfseries,
+      below=0.1cm of dit2]
+    (adaln3) {AdaLN};
+\node[module, fill=corange!25, draw=corange!50, text=corange!60!black,
+      minimum width=5.5em, minimum height=1.4em, font=\tiny\sffamily\bfseries,
+      below=0.1cm of adaln3]
+    (dit3) {Feedforward};
+
+\node[sublbl, below=2pt of ditbox] {$\times N$};
+
+%% ── Output PCA stack (right of DiT, 1/3 down) ──
+\coordinate (pcaoutbase) at ([xshift=1.4cm]ditbox.east |- pca0);
+\foreach \i/\file in {0/pca_ctx_t0, 1/pca_ctx_t4, 2/pca_fut_t0, 3/pca_fut_t15} {
+    \node[imgframe] at ($(pcaoutbase)+(\i*2pt, -\i*2pt)$)
+        (pcaout\i) {\includegraphics[width=2.2cm, interpolate=false]{figures/generated/\file.png}};
+}
+\node[sublbl] (futlbl) at ($(pcaout0.north)!0.5!(pcaout3.north)+(0, 12pt)$) {\textbf{Future Latents} $(\hat{\mathbf{z}}_{C:H})$};
+\draw[arr] (ditbox.east |- pcaout0) -- (pcaout0.west);
+
+%% ── Action trajectory plot (below DiT output) ──
+\node[inner sep=0pt, minimum width=2.2cm, anchor=east] (actplot) at (pcaout3.east |- dit2) {%
+    \tikz[baseline=-0.1em]{
+        \draw[black!70, semithick, -{Stealth[length=2pt]}] (0,0) -- (0, 1.2);
+        \draw[black!70, semithick, -{Stealth[length=2pt]}] (0,0) -- (2.1, 0);
+        \draw[cblue, semithick] plot[smooth, tension=0.6] coordinates
+            {(0,0.33) (0.35,0.53) (0.7,0.47) (1.05,0.73) (1.4,0.67) (1.75,0.77) (2.0,0.87)};
+        \draw[corange, semithick] plot[smooth, tension=0.6] coordinates
+            {(0,0.8) (0.35,0.67) (0.7,0.87) (1.05,0.53) (1.4,0.33) (1.75,0.4) (2.0,0.47)};
+        \draw[cgreen, semithick] plot[smooth, tension=0.6] coordinates
+            {(0,0.53) (0.35,0.2) (0.7,0.33) (1.05,0.4) (1.4,0.53) (1.75,0.27) (2.0,0.2)};
+        \draw[cpurple, semithick] plot[smooth, tension=0.6] coordinates
+            {(0,0.13) (0.35,0.33) (0.7,0.67) (1.05,0.33) (1.4,0.47) (1.75,0.6) (2.0,0.67)};
+        \draw[cred, semithick] plot[smooth, tension=0.6] coordinates
+            {(0,0.93) (0.35,0.8) (0.7,0.53) (1.05,0.67) (1.4,0.87) (1.75,0.8) (2.0,0.73)};
+        \draw[cblue!60!black, semithick] plot[smooth, tension=0.6] coordinates
+            {(0,0.47) (0.35,0.4) (0.7,0.2) (1.05,0.13) (1.4,0.2) (1.75,0.27) (2.0,0.33)};
+    }%
+};
+\node[sublbl, anchor=east] (actlbl) at (futlbl.east |- actplot.north) {\textbf{Actions} $(\hat{\mathbf{a}}_{C:H})$};
+\draw[arr] (ditbox.east |- actplot) -- (actplot.west);
+
+%% ── VLM Encoder Block (left side, below cameras) ──
+
+%% Text input
+\node[sublbl, below=0.3cm of c1f2] (textlbl) {\textbf{Text} $(\mathbf{l}_{C-1})$};
+\node[draw, rounded corners=2pt, fill=cpurple!8, draw=cpurple!40,
+      font=\tiny\sffamily, align=center,
+      text width=1.1cm, minimum height=1.1cm, inner sep=0pt,
+      below=2pt of textlbl]
+    (textinput)
+    {\textit{``pick up the red block...''}};
+
+
+%% Proprioceptive State input
+\node[sublbl, below=0.15cm of textinput] (statelbl) {\textbf{State} $(\mathbf{s}_{C-1})$};
+\node[imgframe, below=2pt of statelbl] (stateinput)
+    {\includegraphics[width=0.9cm]{figures/robotic-arm.png}};
+
+%% VLM blocks (positioned first, vlm2 aligned with dit2)
+\node[module, fill=cpurple!25, draw=cpurple!50, text=cpurple!60!black,
+      minimum width=5.5em, minimum height=1.0em, font=\tiny\sffamily\bfseries]
+    (vlm2) at (vjepa.center |- dit2) {VLM Block};
+\node[module, fill=cpurple!25, draw=cpurple!50, text=cpurple!60!black,
+      minimum width=5.5em, minimum height=1.2em, font=\tiny\sffamily\bfseries,
+      above=0.08cm of vlm2]
+    (vlm1) {VLM Block};
+\node[font=\tiny\bfseries, text=black, below=-0.2cm of vlm2] (vlmdots) {$\vdots$};
+\node[module, fill=cpurple!25, draw=cpurple!50, text=cpurple!60!black,
+      minimum width=5.5em, minimum height=1.0em, font=\tiny\sffamily\bfseries,
+      below=-0.06cm of vlmdots]
+    (vlm3) {VLM Block};
+
+%% VLM wrapper box (drawn behind blocks using fit-like manual sizing)
+\node[draw, thick, rounded corners=4pt, fill=cpurple!20, draw=cpurple!50!black,
+      minimum width=7em, minimum height=2.8cm]
+    (vlmbox) at (vlm2) {};
+\node[anchor=north west, font=\footnotesize\sffamily\bfseries, text=cpurple!60!black] at ($(vlmbox.north west)+(3pt, -2pt)$) (vlmlabel) {VLM};
+\node[anchor=north east, inner sep=2pt] at (vlmbox.north east) {\snowflake[0.14]};
+
+%% Redraw VLM blocks on top of box
+\node[module, fill=cpurple!10, draw=cpurple!40, text=cpurple!60!black,
+      minimum width=5.5em, minimum height=1.2em, font=\tiny\sffamily\bfseries]
+    at (vlm1) {VLM Block};
+\node[module, fill=cpurple!10, draw=cpurple!40, text=cpurple!60!black,
+      minimum width=5.5em, minimum height=1.0em, font=\tiny\sffamily\bfseries]
+    at (vlm2) {VLM Block};
+\node[font=\tiny\bfseries, text=black] at (vlmdots) {$\vdots$};
+\node[module, fill=cpurple!10, draw=cpurple!40, text=cpurple!60!black,
+      minimum width=5.5em, minimum height=1.0em, font=\tiny\sffamily\bfseries]
+    at (vlm3) {VLM Block};
+
+%% Input fork (text + video to VLM)
+\coordinate (vlmfork) at (vidfork |- vlm2);
+\draw[semithick, dotted] (vidfork) -- (vlmfork);
+\draw[semithick, dotted] (textinput.east) -- ++(0.25, 0) |- (vlmfork);
+\draw[arr, dotted] (vlmfork) -- (vlmbox.west |- vlmfork);
+
+%% Output fork (right side of VLM blocks)
+\coordinate (fork) at ($(vlm2.east)+(0.15, 0)$);
+\draw[semithick] (vlm1.east) -- ++(0.15, 0) |- (fork);
+\draw[semithick] (vlm3.east) -- ++(0.15, 0) |- (fork);
+
+%% Oplus and Feedforward
+\node[module, fill=cblue!15, draw=cblue!50!black, text=cblue!60!black,
+      minimum width=1.6cm, minimum height=1.5em, font=\scriptsize\sffamily\bfseries]
+    (proj) at (pca3 |- dit2) {Projection};
+\node[sublbl, above=2pt of proj] {\textbf{Conditioning} $(\mathbf{c}_{C-1})$};
+
+\coordinate (oplusx) at ($(fork)!0.55!(proj.west)$);
+\node[op, inner sep=0pt] (vlmoplus) at (oplusx |- vlm2) {$\oplus$};
+\draw[arr] (vlm2.east) -- (vlmoplus.west);
+\draw[arr] (vlmoplus.east) -- (proj.west);
+
+%% State Encoder (aligned with VLM / Video Encoder column)
+\node[module, fill=cblue!15, draw=cblue!50!black, text=cblue!60!black,
+      minimum width=7em, minimum height=1.5em, font=\scriptsize\sffamily\bfseries]
+    (stateenc) at (vjepa.center |- stateinput) {State Encoder};
+\draw[arr] (stateinput.east) -- ++(0.15, 0) |- (stateenc.west);
+
+%% Oplus: merge conditioning + state before cross-attention
+\coordinate (condmid) at ($(proj.east)!0.5!(dit2.west)$);
+\node[op, inner sep=0pt] (condoplus) at (condmid) {$\oplus$};
+\draw[arr] (proj.east) -- (condoplus.west);
+\draw[semithick] (stateenc.east) -- (condoplus |- stateenc);
+\draw[arr] (condoplus |- stateenc) -- (condoplus.south);
+\draw[arr] (condoplus.east) -- (dit2.west);
 
 \end{tikzpicture}

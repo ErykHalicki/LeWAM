@@ -1,0 +1,27 @@
+model_config: configs/model/base.yaml
+run_tag: multitask-finetune-testing-april8
+
+lerobot_repo_id: ehalicki/so101_multitask
+
+steps: 5000
+effective_batch_size: 64
+base_batch_size: 64
+lr: 1.0e-4
+warmup_steps: 200
+crop_size: 288
+num_workers: 4
+save_every: 50
+small_dataset: false
+resume: full-dataset-base-model-apr4/full-dataset-base-model-apr4_latest.pt
+s3_path: s3://zima-data/lewam/checkpoints
+scaled_fps: 5
+action_fps: 30
+overfit_test: false
+timezone: Europe/Zurich
+action_weight: 2.0
+lang_drop_rate: 0.1
+force_batch_size: null
+restart: true
+gradient_checkpointing: false
+backup_every: 500
+no_compile: false
