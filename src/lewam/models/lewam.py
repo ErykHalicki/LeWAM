@@ -173,7 +173,7 @@ class LeWAM(nn.Module):
 
         if self.vlm_encoder is not None:
             assert vlm_num_layers == depth, (
-                f"v0.3 requires vlm_num_layers == depth, got {vlm_num_layers} vs {depth}. "
+                f"LeWAM v0.3 requires vlm_num_layers == depth, got {vlm_num_layers} vs {depth}. "
                 f"Each DiT block cross-attends to the corresponding VLM layer."
             )
 

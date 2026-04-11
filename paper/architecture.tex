@@ -147,7 +147,7 @@
 \node[sublbl, anchor=east] (actlbl) at (futlbl.east |- actplot.north) {\textbf{Actions} $(\hat{\mathbf{a}}_{C:H})$};
 \draw[arr] (ditbox.east |- actplot) -- (actplot.west);
 
-%% ── VLM Encoder Block (left side, below cameras) ──
+%% ── VLM Block & State Input ──
 
 %% Text input
 \node[sublbl, below=0.3cm of c1f2] (textlbl) {\textbf{Text} $(\mathbf{l}_{C-1})$};
@@ -158,79 +158,31 @@
     (textinput)
     {\textit{``pick up the red block...''}};
 
-
 %% Proprioceptive State input
 \node[sublbl, below=0.15cm of textinput] (statelbl) {\textbf{State} $(\mathbf{s}_{C-1})$};
 \node[imgframe, below=2pt of statelbl] (stateinput)
     {\includegraphics[width=0.9cm]{figures/robotic-arm.png}};
 
-%% VLM blocks (positioned first, vlm2 aligned with dit2)
-\node[module, fill=cpurple!25, draw=cpurple!50, text=cpurple!60!black,
-      minimum width=5.5em, minimum height=1.0em, font=\tiny\sffamily\bfseries]
-    (vlm2) at (vjepa.center |- dit2) {VLM Block};
-\node[module, fill=cpurple!25, draw=cpurple!50, text=cpurple!60!black,
-      minimum width=5.5em, minimum height=1.2em, font=\tiny\sffamily\bfseries,
-      above=0.08cm of vlm2]
-    (vlm1) {VLM Block};
-\node[font=\tiny\bfseries, text=black, below=-0.2cm of vlm2] (vlmdots) {$\vdots$};
-\node[module, fill=cpurple!25, draw=cpurple!50, text=cpurple!60!black,
-      minimum width=5.5em, minimum height=1.0em, font=\tiny\sffamily\bfseries,
-      below=-0.06cm of vlmdots]
-    (vlm3) {VLM Block};
-
-%% VLM wrapper box (drawn behind blocks using fit-like manual sizing)
-\node[draw, thick, rounded corners=4pt, fill=cpurple!20, draw=cpurple!50!black,
-      minimum width=7em, minimum height=2.8cm]
-    (vlmbox) at (vlm2) {};
-\node[anchor=north west, font=\footnotesize\sffamily\bfseries, text=cpurple!60!black] at ($(vlmbox.north west)+(3pt, -2pt)$) (vlmlabel) {VLM};
-\node[anchor=north east, inner sep=2pt] at (vlmbox.north east) {\snowflake[0.14]};
-
-%% Redraw VLM blocks on top of box
-\node[module, fill=cpurple!10, draw=cpurple!40, text=cpurple!60!black,
-      minimum width=5.5em, minimum height=1.2em, font=\tiny\sffamily\bfseries]
-    at (vlm1) {VLM Block};
-\node[module, fill=cpurple!10, draw=cpurple!40, text=cpurple!60!black,
-      minimum width=5.5em, minimum height=1.0em, font=\tiny\sffamily\bfseries]
-    at (vlm2) {VLM Block};
-\node[font=\tiny\bfseries, text=black] at (vlmdots) {$\vdots$};
-\node[module, fill=cpurple!10, draw=cpurple!40, text=cpurple!60!black,
-      minimum width=5.5em, minimum height=1.0em, font=\tiny\sffamily\bfseries]
-    at (vlm3) {VLM Block};
+%% VLM Block (single, with xN, centered on cross-attention)
+\node[module, fill=cpurple!25, draw=cpurple!50!black, text=cpurple!60!black,
+      minimum width=7em]
+    (vlmblock) at (vjepa.center |- dit2) {VLM Block};
+\node[anchor=north east, inner sep=2pt] at (vlmblock.north east) {\snowflake[0.14]};
+\draw[arr] ($(vlmblock.south east)+(-0.15, 0)$) -- ++(0, -0.35) coordinate (loopbot) -- ($(vlmblock.south west)+(0.15, -0.35)$) -- ($(vlmblock.south west)+(0.15, 0)$);
+\node[sublbl, below=1pt of loopbot] {$\times N$};
 
 %% Input fork (text + video to VLM)
-\coordinate (vlmfork) at (vidfork |- vlm2);
+\coordinate (vlmfork) at (vidfork |- vlmblock);
 \draw[semithick, dotted] (vidfork) -- (vlmfork);
 \draw[semithick, dotted] (textinput.east) -- ++(0.25, 0) |- (vlmfork);
-\draw[arr, dotted] (vlmfork) -- (vlmbox.west |- vlmfork);
+\draw[arr, dotted] (vlmfork) -- (vlmblock.west);
 
-%% Output fork (right side of VLM blocks)
-\coordinate (fork) at ($(vlm2.east)+(0.15, 0)$);
-\draw[semithick] (vlm1.east) -- ++(0.15, 0) |- (fork);
-\draw[semithick] (vlm3.east) -- ++(0.15, 0) |- (fork);
-
-%% Oplus and Feedforward
-\node[module, fill=cblue!15, draw=cblue!50!black, text=cblue!60!black,
-      minimum width=1.6cm, minimum height=1.5em, font=\scriptsize\sffamily\bfseries]
-    (proj) at (pca3 |- dit2) {Projection};
-\node[sublbl, above=2pt of proj] {\textbf{Conditioning} $(\mathbf{c}_{C-1})$};
-
-\coordinate (oplusx) at ($(fork)!0.55!(proj.west)$);
-\node[op, inner sep=0pt] (vlmoplus) at (oplusx |- vlm2) {$\oplus$};
-\draw[arr] (vlm2.east) -- (vlmoplus.west);
-\draw[arr] (vlmoplus.east) -- (proj.west);
-
-%% State Encoder (aligned with VLM / Video Encoder column)
-\node[module, fill=cblue!15, draw=cblue!50!black, text=cblue!60!black,
-      minimum width=7em, minimum height=1.5em, font=\scriptsize\sffamily\bfseries]
-    (stateenc) at (vjepa.center |- stateinput) {State Encoder};
-\draw[arr] (stateinput.east) -- ++(0.15, 0) |- (stateenc.west);
-
-%% Oplus: merge conditioning + state before cross-attention
-\coordinate (condmid) at ($(proj.east)!0.5!(dit2.west)$);
-\node[op, inner sep=0pt] (condoplus) at (condmid) {$\oplus$};
-\draw[arr] (proj.east) -- (condoplus.west);
-\draw[semithick] (stateenc.east) -- (condoplus |- stateenc);
-\draw[arr] (condoplus |- stateenc) -- (condoplus.south);
+%% Oplus: merge VLM + state before cross-attention
+\coordinate (oplus_pos) at ($(pca3.east)!0.5!(ditbox.west)$);
+\node[op, inner sep=0pt] (condoplus) at (oplus_pos |- dit2) {$\oplus$};
+\draw[arr] (vlmblock.east) -- node[sublbl, above=1pt] {\textbf{Hidden State} $(\mathbf{h}_{i \in [1, N]})$} (condoplus.west);
+\draw[semithick] (stateinput.east) -- (condoplus |- stateinput);
+\draw[arr] (condoplus |- stateinput) -- (condoplus.south);
 \draw[arr] (condoplus.east) -- (dit2.west);
 
 \end{tikzpicture}

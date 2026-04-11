@@ -1,5 +1,7 @@
 ## Implementation
 
+- reach out to mees for feedback
+
 - double check if theres anything left to change for v0.3
 
 - try running a dummy training run on 1 episode of cube pick and place.
@@ -7,11 +9,6 @@
 - start a single task training run action_only cube task only
 
 - test new changes
-
-- write up experiment design in paper
-    - stick to what smolvla did 
-
-- reach out to mees for feedback
 
 - specify that we use a relative joint space delta action space in the paper
 
@@ -40,7 +37,8 @@
 
 - get evaluation working for SmolVLA, ACT, pi0.5, diffusion policy, basic BC policy (vjepa + mlp)
 
-- add LeRobot citation to paper
+- add a visualization of the various data from the community dataset. Just grab a 20x10 grid of frames from various episodes and visualize. 
+    - add to the paper in the method section under 
 
 
 ### Optional / low priority

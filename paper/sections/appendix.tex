@@ -1,14 +1,15 @@
 \section{Appendix}
 \subsection{Attention structure.}\label{attn_structure}
-A block-causal attention mask enforces temporal ordering while allowing information flow across modalities within each temporal block\cite{DreamZero}.
-Temporal blocks group $b = 2$ tubelets (video) or $b = 2$ action steps.
 
 \begin{figure}[h]
     \centering
-    \includegraphics[width=0.6\columnwidth]{figures/generated/attn_mask.png}
+    \includegraphics[width=0.45\columnwidth]{figures/generated/attn_mask.png}
     \caption{Block-causal attention mask. Colored cells indicate permitted attention. Context blocks are causally masked among themselves. Future and action blocks at temporal index $i$ attend to all context, all preceding blocks of both modalities up to $i$, enabling cross-modal information flow within each temporal step.}
     \label{fig:attn_mask}
 \end{figure}
+
+A block-causal attention mask enforces temporal ordering while allowing information flow across modalities within each temporal block\cite{DreamZero}.
+Temporal blocks group $b = 2$ tubelets (video) or $b = 2$ action steps.
 
 Specifically:
 \begin{itemize}
@@ -18,4 +19,41 @@ Specifically:
 \end{itemize}
 This cross-modal block alignment allows temporally co-occurring video and action predictions to inform each other during denoising.
 
+\subsection{Initial Experiments}
+[TODO: this section may be removed later since I'm still iterating on the architecture and training pipeline]
+
+The following section describes results from early experiments. The architecture has since been modified.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.6\textwidth]{figures/finetune_ode_step_v0_2.png}
+    \caption{PCA visualization of predicted vs ground-truth V-JEPA2 latent frames during an early fine-tuning run. Top: raw video frames. Middle: ground-truth latents. Bottom: model predictions.}
+    \label{fig:ode_viz}
+\end{figure}
+
+Early experiments have shown the model is able to reasonably denoise future video latents and actions using a single DiT, however video latent predictions have suffered from a bit of mode collapse, with the model predicting very little variation from the most recent context frame. (See Figure ~\ref{ode_viz})
+
+Action denoising was more successful, with the model being able to learn a reasonable conditional distribution during fine tuning, however real world rollouts showed mixed results. The policy was able to generate reasonable actions, but achieved limited task success rates ($<$ 10\%)
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/pretrain_loss_curve_v0_2.png}
+    \caption{Pretraining loss curves on the community dataset.}
+    \label{fig:pretrain_loss}
+\end{figure}
+
+Pretraining on the community dataset was somewhat successful, with action loss improving past the trivial baseline of denoising to stationary actions (calculated as roughly 0.35 loss for this dataset), however video latent predictions experienced the aforementioned mode collapse issues, performing no better than the trivial baseline of predicting the last context frame. Furthermore, video flow matching loss was not projected to significantly improve, resulting in early termination of the pretraining run.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/finetune_loss_curve_v0_2.png}
+    \caption{Fine tuning loss curves on a small dataset collected on the SO101 arm.}
+    \label{fig:finetune_loss}
+\end{figure}
+
+A mulittask finetuning run showed much better action prediction performance, however it also showed a complete plateau of the video prediction loss. This may be attributable to the increased action weighting scheme used during fine tuning (2.0 during fine tuning, vs 1.0 during pre training). This suggests that a high action weighting may result in the action loss dominating the training signal, preventing meaningful video prediction improvment. More experiments required.
+
+Overall, early experiments have led to the revision of the architecture to more closely follow \citet{SmolVLA}. Initally, hidden states from SmolVLM2 were compressed into a single token sequence, which all DiT blocks cross attended to. Additionally, only the first 4 VLM layers were used; half of even the smallest baseline from \citet{SmolVLA}. I beleive that both these design decisions prevented meaningful transfer from SmolVLM to LeWAM, making training much more difficult that it needed to be. Some other small details like video projection have also been changed. 
+
+The next round of experiments will focus on verifying the model architecture in single task settings before moving onto multi task, and then pretraining and other experiments. 
 

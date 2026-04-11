@@ -2,13 +2,24 @@
 
 World Action Models (WAMs) have recently emerged as a powerful paradigm for robot learning, jointly predicting future video and robot actions from a shared dynamics model.
 By inheriting rich dynamics priors from internet-scale video pretraining, WAMs like DreamZero~\cite{DreamZero} and MimicVideo~\cite{MimicVideo} achieve remarkably data-efficient training and strong zero-shot generalization across embodiments, environments, and tasks.
-However, these models rely on heavyweight video diffusion backbones with tens of billions of parameters, requiring server-scale compute (GB200, H100 GPUs) for both training and inference, placing them out of reach for smaller labs and the open-source robotics community.
+However, these models rely on heavyweight video diffusion backbones with billions of parameters, requiring server-scale compute (GB200, H100 GPUs) for both training and inference, placing them out of reach for smaller labs and the open-source robotics community, and making them prohibitively difficult to deploy in real-world settings.
 
-This reliance on pixel-space video diffusion may be unnecessary.
+However, this reliance on pixel-space video diffusion may be unnecessary.
+
 DreamZero and MimicVideo both achieve negligible performance loss, or even performance gains, when only partially denoising future video frames, suggesting that fine-grained visual details contribute little to action prediction.
-This observation is consistent with JEPA-style models~\cite{vjepa2_1, LeWorldModel}, which show that predicting in the latent space of a video encoder is far more compute-efficient than pixel-space reconstruction while retaining the dynamics information relevant to downstream tasks.
-Separately, SmolVLA~\cite{SmolVLA} has demonstrated that competitive and generalizable robot policies can be trained at small scale on consumer hardware. However, to our knowledge, this accessibility has not yet been achieved for World Action Models.
+This observation is consistent with JEPA-style models~\cite{vjepa2_1, LeWorldModel, IJEPA}, which show that predicting in the latent space of a video encoder is far more compute-efficient than pixel-space reconstruction while retaining the dynamics information relevant to downstream tasks, such as robotic control~\cite{LeWorldModel, vjepa2_1}.
 
-We present \textbf{LeWAM}, a compact latent-space World-Action Model that combines these ideas.
-LeWAM uses a frozen V-JEPA~2~\cite{vjepa2_1} encoder as its visual backbone, SmolVLM2~\cite{SmolVLM2, SmolVLA} for language conditioning, and a flow-matching Diffusion Transformer (DiT) that jointly denoises future video latents and action trajectories in a single forward pass, following the joint denoising formulation of DreamZero~\cite{DreamZero}.
-By operating entirely in latent space and sharing a single transformer across both prediction targets, LeWAM operates at a fraction of the parameter count, dataset size, and training budget of previous WAMs while remaining trainable and deployable on consumer hardware.
+Although previous JEPA world models have been adapted for robotic manipulation \citep{LeWorldModel, vjepa2_1}, they require expensive inference-time planning and lack language conditioning, limiting their practical applicability. VLA-JEPA~\cite{VLAJEPA} addressed this with a joint world-action modeling objective built on V-JEPA2 latents, achieving promising results. However, their approach separates the latent world model and action head into distinct components, and relies on a computationally heavy VLM backbone. 
+
+Separately, SmolVLA~\cite{SmolVLA} has demonstrated that competitive robot policies can be trained at small scale on consumer hardware, but to our knowledge, this accessibility has not yet been achieved for World-Action Models. 
+
+To bridge this gap, we present \textbf{LeWAM}, a compact latent-space World-Action Model.
+
+LeWAM uses a distilled and frozen V-JEPA~2.1~\cite{vjepa2_1} encoder as its visual backbone, SmolVLM2~\cite{SmolVLM2, SmolVLA} for visually grounded language conditioning, and a flow-matching Diffusion Transformer (DiT) that jointly denoises future video latents and action trajectories in a single forward pass.
+
+By operating entirely in latent space and sharing a single transformer across both prediction targets, LeWAM operates at a fraction of the parameter count [TODO: currently ranging from 300-600M params, finalize this later], dataset size, and training budget of previous WAMs, making it trainable and deployable on a single consumer GPU.
+
+
+
+ 
+ 

@@ -1,7 +1,8 @@
 \section{Experiments}
 
-[TODO]
 
+
+% [TODO: should i even mention v0.1 and v0.2 and other initial experiments that failed?]
 %- first training run 
 %    - 16.8s per step, 18k steps, 64 batch
 %    - rtx 6000s on vast.ai
@@ -23,3 +24,41 @@
 %    - fine tuning on multi task dataset, with 60 more episodes than trainnig run 2
 %    - 2.0 action weight
 %    - 0.5% success rate, managed to pick up a cube twice over the course of an hour
+
+\subsection{Real World Tasks}
+[TODO: add real world evaluation on the same tasks SmolVLA did, plus maybe some zero-shot evalutation like DreamZero]
+[TODO: fine tune SmolVLA, ACT, Diffusion policy]
+
+\subsection{LIBERO}
+[TODO: add LIBERO evaluation for standardized comparison]
+
+\subsection{Ablations}
+
+\subsubsection{World Modelling Objective}
+
+[TODO: does the video latent prediction objective help? If so, when does it help? (single task, multi task, with or without pretraining)]
+
+\subsubsection{JEPA vs Video VAE vs Pixel Space}
+
+[TODO: does using a video JEPA backbone improve performance over adopting a videoVAE like other diffusion models]
+
+[TODO: Is using pixel space diffusion comparable at this scale?]
+
+\subsubsection{Pretraining}
+
+[TODO: does pretraining on community data help downstream performance?]
+
+\subsubsection{Divese Data}
+
+[TODO: does fine tuning on diverse data improve performance due to cross task generalization?]
+
+\subsection{Cross-Embodiment Transfer}
+[TODO: can the model learn to do tasks that are OOD by training on video-only data from different embodiments or even ego centric human data?]
+
+\subsection{Classifier Free Guidance}
+[TODO: DreamZero uses CFG, does it help performance or noticably change the way the policy behaves?]
+
+\subsection{Continual Learning}
+[TODO: Can the video prediction improve from the models own rollouts?]
+
+

@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, MultiLeRobotDataset
+from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+from lerobot.datasets.multi_dataset import MultiLeRobotDataset
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 
