@@ -242,9 +242,10 @@ def train_step(model, raw_batch, accelerator, num_cameras, action_weight=0.0, la
 
     if lang_tokens is not None and lang_drop_rate > 0.0:
         B = context_tokens.shape[0]
-        drop = torch.rand(B, device=lang_tokens.device) < lang_drop_rate
-        lang_tokens = lang_tokens.clone()
-        lang_tokens[drop] = 0.0
+        drop = torch.rand(B, device=lang_tokens[0].device) < lang_drop_rate
+        lang_tokens = [h.clone() for h in lang_tokens]
+        for h in lang_tokens:
+            h[drop] = 0.0
         lang_mask = lang_mask.clone()
         lang_mask[drop] = True
 

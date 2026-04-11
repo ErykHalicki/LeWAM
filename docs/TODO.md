@@ -1,37 +1,8 @@
 ## Implementation
 
-- LeWAM v0.3 
-    - use 256 crop following VJEPA2-AC
-    - match the DiT depth with the truncated VLM depth (16 DiT layers = 16 VLM layers)
-    - maybe try a ViT-L if video prediction performance is still weak (300M)
+- double check if theres anything left to change for v0.3
 
-    - get rid of GEGLU activation, just use GELU for simplicity
-
-    - move video and action projection BEFORE noise addition, following dreamzero
-        - add noise to d_model not d_video and d_action seperately
-    
-    - more VLM layers, same VLM size
-        - 16 layers of 500M smolvlm2, copying smolvla. one layer per DiT layer 
-        - get rid of the vlm projection. instead, use smolVLA attention approach of running the VLM and diffusion head in parrallel
-        - DiT layer N cross attends to VLM latent at layer N
-        - this reduces the need to learn a single unified representation based on only 4 VLM layers, and should allow us to inherit more of the VLMs understanding
-    
-    - keep vjepa2.1 ViTB as the video encoder
-        - use last layer output as context (and ground truth in the video prediction case)
-        - keep the vjepa2.1 context prepended to the action sequence as if it was an action (maintain current architecture)
-        - this way we are essentially just changing how the model interacts with the VLM hidden states.
-
-    - reduce sequence length, less video context and prediction 
-        - maybe even reduce to 3FPS (vjepa2 was trained on 4fps so its not a stretch)
-        - ~3.3 sec context = 10 frames = 5 tublets * 256 tokens per tublet = 1280 tokens * 768dim = ~2Mb context (fp16)
-        - 2 sec horizon = 6 frames = 3 tublets * 256 tpt = 768 tokens * 768 dim = ~0.6Mb future (fp16)
-            - 2 sec horizon = 60 actions @ 30fps = 60 * 768 
-
-    - start first experiment with NO video prediction objective
-        - then add the video latent prediction objective with the exact same dataset and compare performance (once the task is successfully completable)
-        - Collect a CLEAN single task dataset. 5 specific locations, 10 slow demonstrations per location.
-
---- 
+- test new changes
 
 - write up experiment design in paper
     - stick to what smolvla did 

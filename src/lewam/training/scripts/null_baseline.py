@@ -34,7 +34,7 @@ from torchvision.transforms import v2 as transforms
 
 from lewam.datasets.community_dataset import CommunityDataset
 from lewam.models.lewam import LeWAM
-from lewam.models.action_encoders import ActionPreprocessor
+from lewam.models.common import ActionPreprocessor
 from lewam.training.scripts.precompute_norm_stats import precompute_norm_stats
 
 PATCH_SIZE = LeWAM.VJEPA_PATCH_SIZE

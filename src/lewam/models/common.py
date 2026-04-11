@@ -229,30 +229,87 @@ class CrossAttention(nn.Module):
         self.v_projs = nn.ModuleList([nn.Linear(hidden_size, hidden_size) for _ in range(num_sources)])
         self.out_proj = nn.Linear(hidden_size, hidden_size)
 
-    def forward(self, q, sources, source_masks=None, rope=None, q_pos=None):
+    def forward(self, q, sources, source_masks=None, rope=None, q_pos=None, use_kv_cache=False):
         B, N, _ = q.shape
         Q = split_heads(self.q_proj(q), self.num_heads, self.head_dim)
         if rope is not None and q_pos is not None:
             Q = rope(Q, *q_pos)
         Q = self.q_norm(Q)
 
-        Ks, Vs = [], []
-        combined_mask = None
-        for i, src in enumerate(sources):
-            if src is None:
-                continue
-            Ks.append(self.k_norms[i](split_heads(self.k_projs[i](src), self.num_heads, self.head_dim)))
-            Vs.append(split_heads(self.v_projs[i](src), self.num_heads, self.head_dim))
-            if source_masks is not None:
-                m = source_masks[i]
-                chunk = m if m is not None else torch.zeros(B, src.shape[1], dtype=torch.bool, device=q.device)
-                combined_mask = chunk if combined_mask is None else torch.cat([combined_mask, chunk], dim=1)
+        if use_kv_cache and self._cached_k is not None:
+            K = self._cached_k
+            V = self._cached_v
+            attn_mask = self._cached_mask
+        else:
+            Ks, Vs = [], []
+            combined_mask = None
+            for i, src in enumerate(sources):
+                if src is None:
+                    continue
+                Ks.append(self.k_norms[i](split_heads(self.k_projs[i](src), self.num_heads, self.head_dim)))
+                Vs.append(split_heads(self.v_projs[i](src), self.num_heads, self.head_dim))
+                if source_masks is not None:
+                    m = source_masks[i]
+                    chunk = m if m is not None else torch.zeros(B, src.shape[1], dtype=torch.bool, device=q.device)
+                    combined_mask = chunk if combined_mask is None else torch.cat([combined_mask, chunk], dim=1)
 
-        K = torch.cat(Ks, dim=2)
-        V = torch.cat(Vs, dim=2)
-        attn_mask = ~combined_mask.unsqueeze(1).unsqueeze(1) if combined_mask is not None else None
+            K = torch.cat(Ks, dim=2)
+            V = torch.cat(Vs, dim=2)
+            attn_mask = ~combined_mask.unsqueeze(1).unsqueeze(1) if combined_mask is not None else None
+
+            if use_kv_cache:
+                self._cached_k = K
+                self._cached_v = V
+                self._cached_mask = attn_mask
+
         out = F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask)
         return self.out_proj(out.transpose(1, 2).reshape(B, N, -1))
+
+
+# ── Action Preprocessor ─────────────────────────────────────────────────────
+
+class ActionPreprocessor(nn.Module):
+    """
+    Normalizes and unnormalizes relative actions and state using precomputed stats.
+
+    Stats file stores q1..q99, mean, std for both rel_action and state.
+    The norm_strategy selects which percentiles to clip to before z-scoring:
+        "q1_q99"  -> clip to 1st/99th percentile (default)
+        "q5_q95"  -> clip to 5th/95th percentile
+        "q10_q90" -> clip to 10th/90th percentile
+        "none"    -> no clipping, just z-score
+    """
+
+    def __init__(self, stats: dict, norm_strategy: str = "q1_q99"):
+        super().__init__()
+        self.norm_strategy = norm_strategy
+
+        if norm_strategy != "none":
+            lo_key, hi_key = norm_strategy.split("_")
+        else:
+            lo_key, hi_key = "q1", "q99"
+
+        for key in ("rel_action", "state"):
+            self.register_buffer(f"{key}_lo", stats[key][lo_key].float())
+            self.register_buffer(f"{key}_hi", stats[key][hi_key].float())
+            self.register_buffer(f"{key}_mean", stats[key]["mean"].float())
+            self.register_buffer(f"{key}_std", stats[key]["std"].float())
+
+    def normalize_rel_action(self, x: torch.Tensor) -> torch.Tensor:
+        if self.norm_strategy != "none":
+            x = x.clamp(self.rel_action_lo, self.rel_action_hi)
+        return (x - self.rel_action_mean) / self.rel_action_std
+
+    def unnormalize_rel_action(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.rel_action_std + self.rel_action_mean
+
+    def normalize_state(self, x: torch.Tensor) -> torch.Tensor:
+        if self.norm_strategy != "none":
+            x = x.clamp(self.state_lo, self.state_hi)
+        return (x - self.state_mean) / self.state_std
+
+    def unnormalize_state(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.state_std + self.state_mean
 
 
 # ── Transformer Block ────────────────────────────────────────────────────────
@@ -261,7 +318,8 @@ class Block(nn.Module):
     """
     SA (3D RoPE + block-causal mask, adaLN-Zero) -> CA (RoPE on Q) -> MLP (adaLN-Zero)
     """
-    def __init__(self, hidden_size, num_heads, num_sources=0, mlp_ratio=4.0, use_adaln=True, dropout=0.0):
+    def __init__(self, hidden_size, num_heads, num_sources=0, mlp_ratio=4.0,
+                 use_adaln=True, dropout=0.0, sources_dim=None):
         super().__init__()
         self.use_adaln = use_adaln
         self.rope = RoPE3D(hidden_size // num_heads)
@@ -273,6 +331,13 @@ class Block(nn.Module):
         self.has_ca = num_sources > 0
         self.norm_ca = nn.LayerNorm(hidden_size, eps=1e-6) if self.has_ca else None
         self.ca = CrossAttention(hidden_size, num_heads, num_sources) if self.has_ca else None
+        if sources_dim is not None:
+            assert len(sources_dim) == num_sources
+            self.source_projs = nn.ModuleList([
+                nn.Linear(d, hidden_size) for d in sources_dim
+            ])
+        else:
+            self.source_projs = None
 
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=affine, eps=1e-6)
         self.mlp = make_mlp(hidden_size, int(hidden_size * mlp_ratio), hidden_size)
@@ -285,14 +350,16 @@ class Block(nn.Module):
                 nn.Linear(hidden_size, 6 * hidden_size, bias=True),
             )
 
-    def forward(self, x, sources=None, source_masks=None, cond=None, attn_mask=None, pos=None):
+    def forward(self, x, sources=None, source_masks=None, cond=None, attn_mask=None, pos=None,
+                use_kv_cache=False):
         """
         x:            (B, N, hidden_size)
-        sources:      list of (B, N_i, hidden_size) or None per source
+        sources:      list of (B, N_i, source_dim_i) tensors (projected internally if source_projs set)
         source_masks: list of (B, N_i) bool (True=ignore) or None per source
         cond:         (B, hidden_size) adaLN-Zero conditioning
         attn_mask:    (1, 1, N, N) bool, True=attend
         pos:          (t_ids, h_ids, w_ids) for 3D RoPE on all tokens
+        use_kv_cache: if True, cache/reuse cross-attention K/V for static sources
         """
         if not self.use_adaln and cond is not None:
             warnings.warn("cond passed to Block with use_adaln=False, ignored", stacklevel=2)
@@ -306,10 +373,16 @@ class Block(nn.Module):
         sa_out = self.drop(self.sa(h, rope=self.rope, pos=pos, attn_mask=attn_mask))
         x = x + (gate_msa.unsqueeze(1) * sa_out if self.use_adaln else sa_out)
 
-        if self.has_ca and sources is not None:
+        cache_hit = use_kv_cache and self.ca is not None and self.ca._cached_k is not None
+        if self.has_ca and (sources is not None or cache_hit):
+            if not cache_hit and self.source_projs is not None:
+                sources = [
+                    proj(s) if s is not None else None
+                    for proj, s in zip(self.source_projs, sources)
+                ]
             ca_out = self.drop(self.ca(
                 self.norm_ca(x), sources, source_masks=source_masks,
-                rope=self.rope, q_pos=pos,
+                rope=self.rope, q_pos=pos, use_kv_cache=use_kv_cache,
             ))
             x = x + ca_out
 

@@ -1,13 +1,13 @@
 # LeWAM v0.3 Architecture
 
-although trained for many less steps than smolvla and other vlas and WAMs, v0.2 failed to learn how to complete a simple single task, 
-and also video prediction loss completely plateaued very early on in training, with the model predicting the last context frame over and over (complete mode collapse)
+although trained for many less steps than smolvla and other vlas and WAMs, v0.2 failed to learn how to complete a simple single task, with no sign of improvement 
+also video prediction loss completely plateaued very early on in training, with the model predicting the last context frame over and over (complete mode collapse)
 
 i beleive this may be due to hte weak language conditioning, since i limited hte model to only 4 VLM layers, projected into a single d_model token (for each token in the sequence)
 
-V0.3 focuses on inherting more priors from the VLM, as well as increasing model size, essentially copying smolVLAs design, but with the added VJEPA2 embeddings as context
+V0.3 focuses on inherting more priors from the VLM, as well as increasing model size, essentially copying smolVLAs design, but with the added VJEPA2 embeddings as context, and an auxilery loss
 
-Additionally, the approach of v0.2 was too hasty; starting with pretraining before verifying that the model is capable of learning a single task was a mistake
+Additionally, the approach of v0.2 was too hasty; starting with pretraining before verifying that the model is capable of learning a single task was a mistake.
 v0.3 will go from the ground up, starting with a single-task and no video prediction objective to verify that the model works, before proceding to single-task + video prediction, and finally pretraining + multi task fine tuning (with and without video prediction for ablation)
 
 - LeWAM v0.3 

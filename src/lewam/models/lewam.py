@@ -5,12 +5,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from lewam.models.common import (
-    Block, PatchPositionIds, concat_pos_ids,
+    ActionPreprocessor, Block, PatchPositionIds, concat_pos_ids,
     modulate, make_mlp, _USE_FLEX,
 )
 from lewam.models.video_encoder import build_vjepa2_encoder_arch
 from lewam.models.vlm_encoder import VLMEncoder
-from lewam.models.action_encoders import StateEncoder, ActionEncoder, ActionPreprocessor
 
 from torch.nn.attention.flex_attention import create_block_mask
 
@@ -36,6 +35,23 @@ class TimestepEmbedder(nn.Module):
 
     def forward(self, t):
         return self.mlp(self.timestep_embedding(t, self.dim).to(t.dtype))
+
+
+class InputLayer(nn.Module):
+    """Project input tokens to model_dim with adaLN timestep conditioning."""
+    def __init__(self, in_dim, hidden_size):
+        super().__init__()
+        self.linear = nn.Linear(in_dim, hidden_size)
+        self.norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 2 * hidden_size, bias=True),
+        )
+
+    def forward(self, x, cond):
+        x = self.linear(x)
+        shift, scale = self.adaLN_modulation(cond).chunk(2, dim=1)
+        return modulate(self.norm(x), shift, scale)
 
 
 class FinalLayer(nn.Module):
@@ -144,22 +160,33 @@ class LeWAM(nn.Module):
 
         self.vlm_encoder = (
             VLMEncoder(model_id=vlm_model_id, num_layers=vlm_num_layers,
-                       model_dim=model_dim, pretrained=_pretrained_vlm)
+                       pretrained=_pretrained_vlm)
             if vlm_model_id else None
         )
 
+        if self.vlm_encoder is not None:
+            assert vlm_num_layers == depth, (
+                f"v0.3 requires vlm_num_layers == depth, got {vlm_num_layers} vs {depth}. "
+                f"Each DiT block cross-attends to the corresponding VLM layer."
+            )
+
         # ── Projections ───────────────────────────────────────────────────
-        self.video_proj = nn.Linear(self.VJEPA_DIM + 1, model_dim)
-        self.action_encoder = ActionEncoder(action_dim, model_dim)
-        self.state_encoder = StateEncoder(state_dim, model_dim)
+        self.context_proj = nn.Linear(self.VJEPA_DIM, model_dim)
+        self.future_proj = InputLayer(self.VJEPA_DIM, model_dim)
+        self.action_encoder = InputLayer(action_dim, model_dim)
         self.t_embedder = TimestepEmbedder(model_dim)
 
         # ── Transformer ──────────────────────────────────────────────────
-        # Cross-attention sources: state (always) + language (when VLM present)
-        num_ca_sources = 2 if self.vlm_encoder is not None else 1
+        if self.vlm_encoder is not None:
+            num_ca_sources = 2
+            sources_dim = [state_dim, self.vlm_encoder.vlm_hidden_dim]
+        else:
+            num_ca_sources = 1
+            sources_dim = [state_dim]
+
         self.blocks = nn.ModuleList([
             Block(model_dim, num_heads, num_sources=num_ca_sources,
-                  mlp_ratio=mlp_ratio, use_adaln=True)
+                  mlp_ratio=mlp_ratio, use_adaln=True, sources_dim=sources_dim)
             for _ in range(depth)
         ])
 
@@ -245,8 +272,9 @@ class LeWAM(nn.Module):
 
     def encode_language(self, texts, images=None):
         """
-        Returns (tokens, mask) or (None, None) if no VLM.
-        tokens: (B, S, model_dim)   mask: (B, S) bool True=ignore
+        Returns (per_layer, mask) or (None, None) if no VLM.
+        per_layer: list of depth tensors, each (B, S, vlm_hidden_dim)
+        mask: (B, S) bool True=ignore
         """
         if self.vlm_encoder is None:
             return None, None
@@ -272,52 +300,60 @@ class LeWAM(nn.Module):
             (self.action_t_ids, self.action_h_ids, self.action_w_ids),
         )
 
+    def _clear_ode_cache(self):
+        self._cached_context_proj = None
+        for block in self.blocks:
+            if block.ca is not None:
+                block.ca._cached_k = None
+                block.ca._cached_v = None
+                block.ca._cached_mask = None
+
     def forward(self, x_t_video, x_t_action, context_tokens, t, state,
-                lang_tokens=None, lang_mask=None):
+                lang_tokens=None, lang_mask=None, ode_cache=False):
         """
-        x_t_video:      (B, N_fut, vjepa_dim)  noisy future tokens
+        x_t_video:      (B, N_fut, vjepa_dim)  noisy future video tokens
         x_t_action:     (B, N_act, action_dim) noisy actions
-        context_tokens: (B, N_ctx, vjepa_dim)  clean context tokens
+        context_tokens: (B, N_ctx, vjepa_dim)  clean context video tokens
         t:              (B,)                   flow-matching timestep [0,1]
         state:          (B, state_dim)         normalized state
-        lang_tokens:    (B, S, model_dim) | None
+        lang_tokens:    list[(B, S, vlm_hidden_dim)] | None  per-layer VLM hidden states
         lang_mask:      (B, S) bool True=ignore | None
+        ode_cache:      if True, cache/reuse context projection and cross-attention K/V
 
         Returns (video_vel, action_vel):
             video_vel:  (B, N_fut, vjepa_dim)
             action_vel: (B, N_act, action_dim)
         """
-        B = t.shape[0]
         if self._flex_mask.kv_num_blocks.device != t.device:
             self.build_flex_mask()
 
-        ctx_flag = context_tokens.new_ones(B, self.N_ctx, 1)
-        fut_flag = x_t_video.new_zeros(B, self.N_fut, 1)
-        video_in = torch.cat([
-            torch.cat([context_tokens, ctx_flag], dim=-1),
-            torch.cat([x_t_video, fut_flag], dim=-1),
-        ], dim=1)
+        cond = self.t_embedder(t)
+
+        if ode_cache and self._cached_context_proj is not None:
+            ctx_proj = self._cached_context_proj
+        else:
+            ctx_proj = self.context_proj(context_tokens)
+            if ode_cache:
+                self._cached_context_proj = ctx_proj
 
         x = torch.cat([
-            self.video_proj(video_in),
-            self.action_encoder(x_t_action),
+            ctx_proj,
+            self.future_proj(x_t_video, cond),
+            self.action_encoder(x_t_action, cond),
         ], dim=1)
-
-        cond = self.t_embedder(t)
-        state_token = self.state_encoder(state).unsqueeze(1)
+        state_token = state.unsqueeze(1)
 
         pos = self._pos_ids()
 
-        # Cross-attention: state (always idx 0) + language (idx 1 if VLM)
-        if self.vlm_encoder is not None:
-            sources = [state_token, lang_tokens]
-            source_masks = [None, lang_mask]
-        else:
-            sources = [state_token]
-            source_masks = [None]
-
         mask = self._flex_mask if _USE_FLEX else self._dense_mask
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            if lang_tokens is not None:
+                sources = [state_token, lang_tokens[i]]
+                source_masks = [None, lang_mask]
+            else:
+                sources = [state_token]
+                source_masks = [None]
+
             if self.gradient_checkpointing and self.training:
                 x = torch.utils.checkpoint.checkpoint(
                     block, x, sources, source_masks,
@@ -328,6 +364,7 @@ class LeWAM(nn.Module):
                 x = block(
                     x, sources=sources, source_masks=source_masks,
                     cond=cond, attn_mask=mask, pos=pos,
+                    use_kv_cache=ode_cache,
                 )
 
         video_out = x[:, self.N_ctx : self.N_ctx + self.N_fut]
@@ -398,15 +435,19 @@ class LeWAM(nn.Module):
 
         use_cfg = cfg_scale != 1.0 and lang_tokens is not None
 
+        self._clear_ode_cache()
+
         dt = 1.0 / num_steps
         for i in range(num_steps):
             t = torch.full((B,), i * dt, device=device, dtype=dtype)
             v_vid, v_act = self(
                 x_vid, x_act, context_tokens, t, state, lang_tokens, lang_mask,
+                ode_cache=True,
             )
             if use_cfg:
                 v_vid_uncond, v_act_uncond = self(
                     x_vid, x_act, context_tokens, t, state, None, None,
+                    ode_cache=True,
                 )
                 v_vid = v_vid_uncond + cfg_scale * (v_vid - v_vid_uncond)
                 v_act = v_act_uncond + cfg_scale * (v_act - v_act_uncond)
@@ -485,7 +526,7 @@ class LeWAM(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-        for module in (self.video_proj, self.action_encoder, self.state_encoder,
+        for module in (self.context_proj, self.future_proj, self.action_encoder,
                        self.t_embedder, self.blocks, self.video_final,
                        self.action_final):
             module.apply(_basic)

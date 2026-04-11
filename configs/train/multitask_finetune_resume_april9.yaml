@@ -8,7 +8,7 @@ effective_batch_size: 120
 base_batch_size: 120
 lr: 5.0e-5
 warmup_steps: 200
-crop_size: 224
+crop_size: 256
 num_workers: 4
 save_every: 25
 small_dataset: false
