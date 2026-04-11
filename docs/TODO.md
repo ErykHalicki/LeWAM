@@ -2,6 +2,10 @@
 
 - double check if theres anything left to change for v0.3
 
+- try running a dummy training run on 1 episode of cube pick and place.
+- collect more cube episodes
+- start a single task training run action_only cube task only
+
 - test new changes
 
 - write up experiment design in paper
@@ -19,8 +23,6 @@
     - if we provide ground truth future latents, how good is the models implicit IDM? 
     - can it relaibly generate the correct actions that caused a specific video sequence?
 
-- add automatic archival saving every 1000 steps
-    - in addition to the _latest.pt, save step1000.pt, step2000.pt, etc
 
 - add model size specifications to the paper
     - i think this goes in the experiments section though, since the method should be size agnostic
@@ -31,24 +33,15 @@
     - Community Datasets
     - Affordable robots and hardware
 
-- critical ablation: does world modelling objective help task success rates?
-    - need to train a similar model with no video loss weight
-        - need to remove the future latent noise from the model input
-    - if the model trains equally well or better, world modelling at this scale doesnt help
-
 - experiment idea: fit chinchilla scaling laws to world modelling objective vs without
     - Compare the 2 scaling curves and see if world modelling helps
     - see if the losses are converging or diverging
     - ask a robot learning person if they think this is a valid experiment
 
-
 - get evaluation working for SmolVLA, ACT, pi0.5, diffusion policy, basic BC policy (vjepa + mlp)
 
 - add LeRobot citation to paper
 
-- add 3D-RoPE interpolation
-    - so the positional ids are the same as training, map the inference resolution onto the training resolution
-    - at least i think thats how it works
 
 ### Optional / low priority
 

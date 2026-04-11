@@ -275,3 +275,69 @@ class TestOverfit:
             opt.step()
 
         assert loss.item() < 0.1, f"Failed to overfit (loss={loss.item():.4f})"
+
+
+# ── Action-only mode ────────────────────────────────────────────────────────
+
+TINY_ACTION_ONLY_CFG = dict(
+    model_dim=DIM, depth=DEPTH, num_heads=HEADS,
+    num_context_frames=4, num_future_frames=4,
+    frame_latent_h=2, frame_latent_w=2, fps=10.0,
+    action_dim=6, state_dim=6,
+    vlm_model_id=None,
+    norm_stats=LeWAM._dummy_norm_stats(6, 6),
+    action_only=True,
+)
+
+
+class TestActionOnly:
+    @pytest.fixture
+    def ao_model(self):
+        return LeWAM(**TINY_ACTION_ONLY_CFG)
+
+    def test_no_video_modules(self, ao_model):
+        assert ao_model.future_proj is None
+        assert ao_model.video_final is None
+        assert ao_model.future_pos is None
+        assert ao_model.N_fut == 0
+
+    def test_forward_shapes(self, ao_model):
+        B = 2
+        v, a = ao_model(
+            x_t_video=None,
+            x_t_action=torch.randn(B, ao_model.N_act, 6),
+            context_tokens=torch.randn(B, ao_model.N_ctx, ao_model.VJEPA_DIM),
+            t=torch.rand(B), state=torch.randn(B, 6),
+        )
+        assert v is None
+        assert a.shape == (B, ao_model.N_act, 6)
+
+    def test_ode_solve(self, ao_model):
+        ao_model.eval()
+        ctx = torch.randn(1, ao_model.N_ctx, ao_model.VJEPA_DIM)
+        state = torch.randn(1, 6)
+        v, a = ao_model.ode_solve(ctx, state, num_steps=3)
+        assert v is None
+        assert a.shape == (1, ao_model.N_act, 6)
+        assert not torch.isnan(a).any()
+
+    def test_overfit(self):
+        torch.manual_seed(42)
+        m = LeWAM(**TINY_ACTION_ONLY_CFG)
+        m.train()
+
+        x_act = torch.randn(1, m.N_act, 6)
+        ctx = torch.randn(1, m.N_ctx, m.VJEPA_DIM)
+        t = torch.tensor([0.5])
+        state = torch.randn(1, 6)
+        target_act = torch.randn(1, m.N_act, 6)
+
+        opt = torch.optim.Adam(m.parameters(), lr=1e-3)
+        for _ in range(300):
+            _, v_act = m(None, x_act, ctx, t, state)
+            loss = torch.nn.functional.mse_loss(v_act, target_act)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+
+        assert loss.item() < 0.1, f"Failed to overfit (loss={loss.item():.4f})"

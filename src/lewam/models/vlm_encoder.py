@@ -30,7 +30,6 @@ class VLMEncoder(nn.Module):
         pretrained: bool = True,
     ):
         super().__init__()
-        self.gradient_checkpointing = False
         self.processor = AutoProcessor.from_pretrained(model_id)
 
         if pretrained:
@@ -120,19 +119,12 @@ class VLMEncoder(nn.Module):
 
             per_layer = []
             for layer in self.lm_layers:
-                if self.gradient_checkpointing:
-                    hidden = torch.utils.checkpoint.checkpoint(
-                        layer, hidden, causal_mask, position_ids,
-                        None, False, position_embeddings,
-                        use_reentrant=False,
-                    )
-                else:
-                    hidden = layer(
-                        hidden,
-                        attention_mask=causal_mask,
-                        position_ids=position_ids,
-                        position_embeddings=position_embeddings,
-                    )
+                hidden = layer(
+                    hidden,
+                    attention_mask=causal_mask,
+                    position_ids=position_ids,
+                    position_embeddings=position_embeddings,
+                )
                 per_layer.append(hidden)
 
         padding_mask = attn_mask == 0

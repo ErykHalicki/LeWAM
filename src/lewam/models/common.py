@@ -116,7 +116,7 @@ def split_heads(x, num_heads, head_dim):
 
 # ── RoPE ──────────────────────────────────────────────────────────────────────
 
-PRETRAINED_GRID_SIZE = 14  # TODO: make configurable / loadable from checkpoint
+PRETRAINED_GRID_SIZE = 16
 
 class RoPE3D(nn.Module):
     """

@@ -1,11 +1,13 @@
 model_dim: 512
-depth: 8
+depth: 12
 num_heads: 8
-num_context_frames: 4
+num_context_frames: 8
 num_future_frames: 8
 action_dim: 6
 state_dim: 6
 vlm_model_id: HuggingFaceTB/SmolVLM2-256M-Video-Instruct
-vlm_num_layers: 8
+vlm_num_layers: 12
 mlp_ratio: 4.0
-norm_strategy: q3_q97
+norm_strategy: q1_q99
+attn_block_size: 1
+action_only: false

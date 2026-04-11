@@ -15,11 +15,6 @@ v0.3 will go from the ground up, starting with a single-task and no video predic
     - match the DiT depth with the truncated VLM depth (16 DiT layers = 16 VLM layers)
     - maybe try a ViT-L if video prediction performance is still weak (300M)
 
-    - get rid of GEGLU activation, just use GELU for simplicity
-
-    - move video and action projection BEFORE noise addition, following dreamzero
-        - add noise to d_model not d_video and d_action seperately
-    
     - many more VLM layers, different attnetion scheme
         - 12+ layers of smolvlm2, copying smolvla. one layer per DiT layer 
             - start with 256M for single task, if it works, up to 500M for better capacity)
@@ -30,14 +25,13 @@ v0.3 will go from the ground up, starting with a single-task and no video predic
     - keep vjepa2.1 ViTB as the video encoder
         - use last layer output as context (and ground truth in the video prediction case)
         - keep the vjepa2.1 context prepended to the action sequence as if it was an action (maintain current architecture)
-        - this way we are essentially just changing how the model interacts with the VLM hidden states.
+        - this way we are just changing how the model interacts with the VLM hidden states.
 
     - reduce sequence length, less video context and prediction 
         - maybe even reduce to 3FPS (vjepa2 was trained on 4fps so its not a stretch)
-            - maybe stick to 5 since thats what dreamzero did
-        - ~3.3 sec context = 10 frames = 5 tublets * 256 tokens per tublet = 1280 tokens * 768dim = ~2Mb context (fp16)
-        - 2 sec horizon = 6 frames = 3 tublets * 256 tpt = 768 tokens * 768 dim = ~0.6Mb future (fp16)
-            - 2 sec horizon = 60 actions @ 30fps = 60 * 768 
+        - ~2.67 sec context = 8 frames = 4 tublets * 256 tokens = 1024 tokens * 768dim = ~1.6Mb context (fp16)
+        - ~2.67 sec horizon = 8 frames = 4 tublets * 256 tokens = 1024 tokens * 768dim = ~1.6Mb future (fp16)
+            - 2.67 sec horizon = 80 actions @ 30fps = 80 * 768 = ~0.1MB
 
     - start first experiment with NO video prediction objective
         - then add the video latent prediction objective with the exact same dataset and compare performance (once the task is successfully completable)

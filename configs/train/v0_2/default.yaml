@@ -1,24 +1,22 @@
 model_config: configs/model/base.yaml
 run_tag: null
 
-lerobot_repo_id: null 
-
 steps: 50000
 effective_batch_size: 64
 base_batch_size: 64
-lr: 7.0e-5
-warmup_steps: 200
+lr: 1.0e-4
+warmup_steps: 50
 crop_size: 256
 num_workers: 4
-save_every: 50
-small_dataset: false # runs on lewam_community_dataset_small
+save_every: 100
+small_dataset: false
 resume: null
 s3_path: s3://zima-data/lewam/checkpoints
-scaled_fps: 3
+scaled_fps: 10
 action_fps: 30
-overfit_test: false 
+overfit_test: false
 timezone: Europe/Zurich
-action_weight: 1.0 # not sure what this should be tbh
-lang_drop_rate: 0.15
+action_weight: 1.0
+lang_drop_rate: 0.1
 force_batch_size: null
-no_compile: true
+no_compile: false

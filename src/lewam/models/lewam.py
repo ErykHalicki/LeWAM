@@ -105,6 +105,8 @@ class LeWAM(nn.Module):
         norm_stats=None,
         norm_strategy="q1_q99",
         mlp_ratio=4.0,
+        attn_block_size=1,
+        action_only=False,
         interpolate_rope=True,
         _pretrained_vlm=True,
     ):
@@ -122,10 +124,14 @@ class LeWAM(nn.Module):
             "vlm_model_id": vlm_model_id, "vlm_num_layers": vlm_num_layers,
             "norm_strategy": norm_strategy,
             "mlp_ratio": mlp_ratio,
+            "attn_block_size": attn_block_size,
+            "action_only": action_only,
         }
 
         self.model_dim = model_dim
         self.action_dim = action_dim
+        self.attn_block_size = attn_block_size
+        self.action_only = action_only
         self.num_context_frames = num_context_frames
         self.num_future_frames = num_future_frames
         self.frame_latent_h = frame_latent_h
@@ -138,7 +144,8 @@ class LeWAM(nn.Module):
         num_ctx_t = num_context_frames // self.VJEPA_TUBELET_SIZE
         num_fut_t = num_future_frames // self.VJEPA_TUBELET_SIZE
         assert num_ctx_t % 2 == 0, f"Context tubelets ({num_ctx_t}) must be even"
-        assert num_fut_t % 2 == 0, f"Future tubelets ({num_fut_t}) must be even"
+        if not action_only:
+            assert num_fut_t % 2 == 0, f"Future tubelets ({num_fut_t}) must be even"
         self.num_context_tubelets = num_ctx_t
         self.num_future_tubelets = num_fut_t
 
@@ -149,7 +156,7 @@ class LeWAM(nn.Module):
 
         spatial = frame_latent_h * frame_latent_w
         self.N_ctx = num_ctx_t * spatial
-        self.N_fut = num_fut_t * spatial
+        self.N_fut = 0 if action_only else num_fut_t * spatial
         self.N_act = action_horizon
 
         # ── Encoders ──────────────────────────────────────────────────────
@@ -172,7 +179,7 @@ class LeWAM(nn.Module):
 
         # ── Projections ───────────────────────────────────────────────────
         self.context_proj = nn.Linear(self.VJEPA_DIM, model_dim)
-        self.future_proj = InputLayer(self.VJEPA_DIM, model_dim)
+        self.future_proj = None if action_only else InputLayer(self.VJEPA_DIM, model_dim)
         self.action_encoder = InputLayer(action_dim, model_dim)
         self.t_embedder = TimestepEmbedder(model_dim)
 
@@ -186,12 +193,13 @@ class LeWAM(nn.Module):
 
         self.blocks = nn.ModuleList([
             Block(model_dim, num_heads, num_sources=num_ca_sources,
-                  mlp_ratio=mlp_ratio, use_adaln=True, sources_dim=sources_dim)
+                  mlp_ratio=mlp_ratio, use_adaln=True, dropout=0.01,
+                  sources_dim=sources_dim)
             for _ in range(depth)
         ])
 
         # ── Output heads ─────────────────────────────────────────────────
-        self.video_final = FinalLayer(model_dim, self.VJEPA_DIM)
+        self.video_final = None if action_only else FinalLayer(model_dim, self.VJEPA_DIM)
         self.action_final = FinalLayer(model_dim, action_dim)
 
         # ── Action normalization ─────────────────────────────────────────
@@ -200,13 +208,14 @@ class LeWAM(nn.Module):
         self.action_preprocessor = ActionPreprocessor(norm_stats, norm_strategy)
 
         # ── Position IDs ─────────────────────────────────────────────────
+        tubelet_fps = fps / self.VJEPA_TUBELET_SIZE
         self.context_pos = PatchPositionIds(
-            num_ctx_t, frame_latent_h, frame_latent_w, fps, t_offset=0,
+            num_ctx_t, frame_latent_h, frame_latent_w, tubelet_fps, t_offset=0,
         )
-        self.future_pos = PatchPositionIds(
-            num_fut_t, frame_latent_h, frame_latent_w, fps, t_offset=num_ctx_t,
+        self.future_pos = None if action_only else PatchPositionIds(
+            num_fut_t, frame_latent_h, frame_latent_w, tubelet_fps, t_offset=num_ctx_t,
         )
-        self._register_action_pos(num_ctx_t, fps, action_horizon, action_fps)
+        self._register_action_pos(num_ctx_t, tubelet_fps, action_horizon, action_fps)
 
         # ── Attention mask ───────────────────────────────────────────────
         self.build_flex_mask()
@@ -294,11 +303,11 @@ class LeWAM(nn.Module):
     # ── Forward ───────────────────────────────────────────────────────────
 
     def _pos_ids(self):
-        return concat_pos_ids(
-            self.context_pos.pos,
-            self.future_pos.pos,
-            (self.action_t_ids, self.action_h_ids, self.action_w_ids),
-        )
+        parts = [self.context_pos.pos]
+        if self.future_pos is not None:
+            parts.append(self.future_pos.pos)
+        parts.append((self.action_t_ids, self.action_h_ids, self.action_w_ids))
+        return concat_pos_ids(*parts)
 
     def _clear_ode_cache(self):
         self._cached_context_proj = None
@@ -311,7 +320,7 @@ class LeWAM(nn.Module):
     def forward(self, x_t_video, x_t_action, context_tokens, t, state,
                 lang_tokens=None, lang_mask=None, ode_cache=False):
         """
-        x_t_video:      (B, N_fut, vjepa_dim)  noisy future video tokens
+        x_t_video:      (B, N_fut, vjepa_dim)  noisy future video tokens (ignored if action_only)
         x_t_action:     (B, N_act, action_dim) noisy actions
         context_tokens: (B, N_ctx, vjepa_dim)  clean context video tokens
         t:              (B,)                   flow-matching timestep [0,1]
@@ -321,7 +330,7 @@ class LeWAM(nn.Module):
         ode_cache:      if True, cache/reuse context projection and cross-attention K/V
 
         Returns (video_vel, action_vel):
-            video_vel:  (B, N_fut, vjepa_dim)
+            video_vel:  (B, N_fut, vjepa_dim) or None if action_only
             action_vel: (B, N_act, action_dim)
         """
         if self._flex_mask.kv_num_blocks.device != t.device:
@@ -336,11 +345,11 @@ class LeWAM(nn.Module):
             if ode_cache:
                 self._cached_context_proj = ctx_proj
 
-        x = torch.cat([
-            ctx_proj,
-            self.future_proj(x_t_video, cond),
-            self.action_encoder(x_t_action, cond),
-        ], dim=1)
+        parts = [ctx_proj]
+        if self.future_proj is not None:
+            parts.append(self.future_proj(x_t_video, cond))
+        parts.append(self.action_encoder(x_t_action, cond))
+        x = torch.cat(parts, dim=1)
         state_token = state.unsqueeze(1)
 
         pos = self._pos_ids()
@@ -367,9 +376,12 @@ class LeWAM(nn.Module):
                     use_kv_cache=ode_cache,
                 )
 
-        video_out = x[:, self.N_ctx : self.N_ctx + self.N_fut]
         action_out = x[:, self.N_ctx + self.N_fut :]
 
+        if self.action_only:
+            return None, self.action_final(action_out, cond)
+
+        video_out = x[:, self.N_ctx : self.N_ctx + self.N_fut]
         return self.video_final(video_out, cond), self.action_final(action_out, cond)
 
     # ── Inference ─────────────────────────────────────────────────────────
@@ -430,7 +442,7 @@ class LeWAM(nn.Module):
             context_tokens.device,
             context_tokens.dtype,
         )
-        x_vid = torch.randn(B, self.N_fut, self.VJEPA_DIM, device=device, dtype=dtype)
+        x_vid = None if self.action_only else torch.randn(B, self.N_fut, self.VJEPA_DIM, device=device, dtype=dtype)
         x_act = torch.randn(B, self.N_act, self.action_dim, device=device, dtype=dtype)
 
         use_cfg = cfg_scale != 1.0 and lang_tokens is not None
@@ -449,9 +461,10 @@ class LeWAM(nn.Module):
                     x_vid, x_act, context_tokens, t, state, None, None,
                     ode_cache=True,
                 )
-                v_vid = v_vid_uncond + cfg_scale * (v_vid - v_vid_uncond)
+                v_vid = v_vid_uncond + cfg_scale * (v_vid - v_vid_uncond) if v_vid is not None else None
                 v_act = v_act_uncond + cfg_scale * (v_act - v_act_uncond)
-            x_vid = x_vid + v_vid * dt
+            if v_vid is not None:
+                x_vid = x_vid + v_vid * dt
             x_act = x_act + v_act * dt
 
         if smooth:
@@ -501,10 +514,12 @@ class LeWAM(nn.Module):
         spatial = self.frame_latent_h * self.frame_latent_w
         device = next(self.parameters()).device
         self._flex_mask = self._build_flex_mask(
-            self.N_ctx, self.N_fut, self.N_act, spatial, device=device,
+            self.N_ctx, self.N_fut, self.N_act, spatial,
+            block_size=self.attn_block_size, device=device,
         )
         self._dense_mask = self._build_flex_mask(
-            self.N_ctx, self.N_fut, self.N_act, spatial, device="cpu", flex_block_size=1,
+            self.N_ctx, self.N_fut, self.N_act, spatial,
+            block_size=self.attn_block_size, device="cpu", flex_block_size=1,
         ).to_dense().squeeze().bool().to(device)
 
     @staticmethod
@@ -529,17 +544,19 @@ class LeWAM(nn.Module):
         for module in (self.context_proj, self.future_proj, self.action_encoder,
                        self.t_embedder, self.blocks, self.video_final,
                        self.action_final):
-            module.apply(_basic)
+            if module is not None:
+                module.apply(_basic)
 
         for block in self.blocks:
             nn.init.zeros_(block.adaLN_modulation[-1].weight)
             nn.init.zeros_(block.adaLN_modulation[-1].bias)
 
         for final in (self.video_final, self.action_final):
-            nn.init.zeros_(final.adaLN_modulation[-1].weight)
-            nn.init.zeros_(final.adaLN_modulation[-1].bias)
-            nn.init.zeros_(final.linear.weight)
-            nn.init.zeros_(final.linear.bias)
+            if final is not None:
+                nn.init.zeros_(final.adaLN_modulation[-1].weight)
+                nn.init.zeros_(final.adaLN_modulation[-1].bias)
+                nn.init.zeros_(final.linear.weight)
+                nn.init.zeros_(final.linear.bias)
 
     # ── Runtime config ────────────────────────────────────────────────────
 
@@ -549,17 +566,20 @@ class LeWAM(nn.Module):
         self.action_fps = action_fps
         self.action_horizon = action_horizon
         self.N_act = action_horizon
+        tubelet_fps = self.fps / self.VJEPA_TUBELET_SIZE
         self._register_action_pos(
-            self.num_context_tubelets, self.fps, action_horizon, action_fps,
+            self.num_context_tubelets, tubelet_fps, action_horizon, action_fps,
         )
         self.build_flex_mask()
 
     def set_fps(self, fps):
         self.fps = fps
-        self.context_pos.set_fps(fps)
-        self.future_pos.set_fps(fps)
+        tubelet_fps = fps / self.VJEPA_TUBELET_SIZE
+        self.context_pos.set_fps(tubelet_fps)
+        if self.future_pos is not None:
+            self.future_pos.set_fps(tubelet_fps)
         self._register_action_pos(
-            self.num_context_tubelets, fps, self.action_horizon, self.action_fps,
+            self.num_context_tubelets, tubelet_fps, self.action_horizon, self.action_fps,
         )
 
     def set_patch_grid(self, H, W, num_cameras=None):

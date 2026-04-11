@@ -252,8 +252,13 @@ def train_step(model, raw_batch, accelerator, num_cameras, action_weight=0.0, la
     B = context_tokens.shape[0]
     t = torch.rand(B, device=context_tokens.device, dtype=context_tokens.dtype)
 
-    x0_video = torch.randn_like(future_tokens)
-    x_t_video = (1 - t[:, None, None]) * x0_video + t[:, None, None] * future_tokens
+    action_only = model.module.action_only if hasattr(model, "module") else model.action_only
+
+    if action_only:
+        x_t_video = None
+    else:
+        x0_video = torch.randn_like(future_tokens)
+        x_t_video = (1 - t[:, None, None]) * x0_video + t[:, None, None] * future_tokens
 
     x0_action = torch.randn_like(rel_velocity)
     x_t_action = (1 - t[:, None, None]) * x0_action + t[:, None, None] * rel_velocity
@@ -269,12 +274,16 @@ def train_step(model, raw_batch, accelerator, num_cameras, action_weight=0.0, la
             lang_mask=lang_mask,
         )
 
-        target_video = future_tokens.detach() - x0_video
         target_action = rel_velocity - x0_action
-
-        video_loss = _masked_mse(video_vel, target_video, future_valid)
         action_loss = _masked_mse(action_vel, target_action, action_valid)
-        total_loss = video_loss + action_weight * action_loss
+
+        if action_only:
+            video_loss = torch.tensor(0.0, device=action_loss.device)
+            total_loss = action_loss
+        else:
+            target_video = future_tokens.detach() - x0_video
+            video_loss = _masked_mse(video_vel, target_video, future_valid)
+            total_loss = video_loss + action_weight * action_loss
 
     return total_loss, {
         "total_loss": total_loss.detach(),
@@ -432,7 +441,7 @@ def main():
 
     # ── Optimizer ─────────────────────────────────────────────────────────
     trainable = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=train_cfg["lr"], eps=1e-7)
+    optimizer = torch.optim.AdamW(trainable, lr=train_cfg["lr"], betas=(0.9, 0.95), eps=1e-7)
 
     # ── Batch size calibration (raw model, no compile, no DDP) ───────────
     _CALIB_TASK = (
@@ -509,7 +518,7 @@ def main():
     model.load_state_dict(_model_state)
     del _model_state
     torch.cuda.empty_cache()
-    optimizer = torch.optim.AdamW(trainable, lr=train_cfg["lr"], eps=1e-7)
+    optimizer = torch.optim.AdamW(trainable, lr=train_cfg["lr"], betas=(0.9, 0.95), eps=1e-7)
     if _optimizer_state is not None:
         optimizer.load_state_dict(_optimizer_state)
         for g in optimizer.param_groups:

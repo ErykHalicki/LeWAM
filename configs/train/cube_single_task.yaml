@@ -1,7 +1,7 @@
-model_config: configs/model/base.yaml
-run_tag: null
+model_config: configs/model/small_action_only.yaml
+run_tag: cube_single_task
 
-lerobot_repo_id: null 
+lerobot_repo_id: ehalicki/so101_cube_simple
 
 steps: 50000
 effective_batch_size: 64

@@ -1,11 +1,14 @@
-model_dim: 512
-depth: 12
-num_heads: 8
-num_context_frames: 16 # 3.2 seconds @ 5hz
-num_future_frames: 12 # 2.4 seconds @ 5hz (action horizon = 2.4*30 = 72)
+model_dim: 768
+depth: 16
+num_heads: 12
+num_context_frames: 8 # 2.67 seconds @ 3hz
+num_future_frames: 8 # 2.67 seconds @ 3hz (action horizon = 2.67*30 = 80)
 action_dim: 6
 state_dim: 6
 vlm_model_id: HuggingFaceTB/SmolVLM2-256M-Video-Instruct
-vlm_num_layers: 12
+vlm_num_layers: 16
 mlp_ratio: 4.0
 norm_strategy: q1_q99
+attn_block_size: 1
+action_only: false
+

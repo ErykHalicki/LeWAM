@@ -7,10 +7,9 @@
 ## Key files
 
 - `src/lewam/models/lewam.py` — `LeWAM` class (constructor, `from_checkpoint`, `ode_solve`)
-- `src/lewam/models/action_encoders.py` — `ActionPreprocessor` (quantile-based norm), `StateEncoder`, `ActionEncoder`
 - `src/lewam/models/video_encoder.py` — `VJEPA2VideoEncoder`, `VJEPA2VideoPreprocessor` (frozen VJEPA2-B, multi-camera stitching)
-- `src/lewam/models/vlm_encoder.py` — `VLMEncoder` (truncated SmolVLM2, frozen)
-- `src/lewam/models/common.py` — `Block`, `RoPE3D`, `SelfAttention`, `CrossAttention`, `PatchPositionIds`
+- `src/lewam/models/vlm_encoder.py` — `VLMEncoder` (per-layer SmolVLM2, frozen)
+- `src/lewam/models/common.py` — `Block`, `RoPE3D`, `SelfAttention`, `CrossAttention`, `ActionPreprocessor`, `PatchPositionIds`
 - `src/lewam/training/common.py` — `save_ode_viz`, `resolve_checkpoint`, `find_max_batch_size`, `compute_norm_stats_*`
 - `src/lewam/training/scripts/train.py` — main training loop (flow matching, gradient accumulation, S3 sync)
 
