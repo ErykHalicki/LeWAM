@@ -132,6 +132,7 @@ class LeWAM(nn.Module):
         self.action_dim = action_dim
         self.attn_block_size = attn_block_size
         self.action_only = action_only
+        self._video_only = False
         self.num_context_frames = num_context_frames
         self.num_future_frames = num_future_frames
         self.frame_latent_h = frame_latent_h
@@ -193,7 +194,7 @@ class LeWAM(nn.Module):
 
         self.blocks = nn.ModuleList([
             Block(model_dim, num_heads, num_sources=num_ca_sources,
-                  mlp_ratio=mlp_ratio, use_adaln=True, dropout=0.01,
+                  mlp_ratio=mlp_ratio, use_adaln=True, dropout=0.0,
                   sources_dim=sources_dim)
             for _ in range(depth)
         ])
@@ -306,7 +307,8 @@ class LeWAM(nn.Module):
         parts = [self.context_pos.pos]
         if self.future_pos is not None:
             parts.append(self.future_pos.pos)
-        parts.append((self.action_t_ids, self.action_h_ids, self.action_w_ids))
+        if not self._video_only:
+            parts.append((self.action_t_ids, self.action_h_ids, self.action_w_ids))
         return concat_pos_ids(*parts)
 
     def _clear_ode_cache(self):
@@ -348,7 +350,8 @@ class LeWAM(nn.Module):
         parts = [ctx_proj]
         if self.future_proj is not None:
             parts.append(self.future_proj(x_t_video, cond))
-        parts.append(self.action_encoder(x_t_action, cond))
+        if not self._video_only:
+            parts.append(self.action_encoder(x_t_action, cond))
         x = torch.cat(parts, dim=1)
         state_token = state.unsqueeze(1)
 
@@ -375,6 +378,10 @@ class LeWAM(nn.Module):
                     cond=cond, attn_mask=mask, pos=pos,
                     use_kv_cache=ode_cache,
                 )
+
+        if self._video_only:
+            video_out = x[:, self.N_ctx : self.N_ctx + self.N_fut]
+            return self.video_final(video_out, cond), None
 
         action_out = x[:, self.N_ctx + self.N_fut :]
 
@@ -443,7 +450,7 @@ class LeWAM(nn.Module):
             context_tokens.dtype,
         )
         x_vid = None if self.action_only else torch.randn(B, self.N_fut, self.VJEPA_DIM, device=device, dtype=dtype)
-        x_act = torch.randn(B, self.N_act, self.action_dim, device=device, dtype=dtype)
+        x_act = None if self._video_only else torch.randn(B, self.N_act, self.action_dim, device=device, dtype=dtype)
 
         use_cfg = cfg_scale != 1.0 and lang_tokens is not None
 
@@ -462,12 +469,13 @@ class LeWAM(nn.Module):
                     ode_cache=True,
                 )
                 v_vid = v_vid_uncond + cfg_scale * (v_vid - v_vid_uncond) if v_vid is not None else None
-                v_act = v_act_uncond + cfg_scale * (v_act - v_act_uncond)
+                v_act = v_act_uncond + cfg_scale * (v_act - v_act_uncond) if v_act is not None else None
             if v_vid is not None:
                 x_vid = x_vid + v_vid * dt
-            x_act = x_act + v_act * dt
+            if v_act is not None:
+                x_act = x_act + v_act * dt
 
-        if smooth:
+        if smooth and x_act is not None:
             x_act = self.smooth_actions(x_act)
 
         return x_vid, x_act
@@ -560,12 +568,29 @@ class LeWAM(nn.Module):
 
     # ── Runtime config ────────────────────────────────────────────────────
 
+    def set_video_only_mode(self, enabled: bool):
+        """Drop action tokens from the transformer sequence entirely.
+
+        When enabled: forward() skips action_encoder/action_final, the flex
+        mask is rebuilt with N_act=0, and action_encoder/action_final params
+        are frozen so weight decay does not drift them. Reversible.
+        """
+        if self.action_only and enabled:
+            raise ValueError("Cannot enable video_only on an action_only model.")
+        self._video_only = bool(enabled)
+        self.N_act = 0 if enabled else self.action_horizon
+        for p in self.action_encoder.parameters():
+            p.requires_grad = not enabled
+        for p in self.action_final.parameters():
+            p.requires_grad = not enabled
+        self.build_flex_mask()
+
     def set_action_fps(self, action_fps):
         action_horizon = int((self.num_future_frames / self.fps) * action_fps)
         assert action_horizon % 2 == 0, f"Action horizon ({action_horizon}) must be even"
         self.action_fps = action_fps
         self.action_horizon = action_horizon
-        self.N_act = action_horizon
+        self.N_act = 0 if self._video_only else action_horizon
         tubelet_fps = self.fps / self.VJEPA_TUBELET_SIZE
         self._register_action_pos(
             self.num_context_tubelets, tubelet_fps, action_horizon, action_fps,
@@ -585,13 +610,14 @@ class LeWAM(nn.Module):
     def set_patch_grid(self, H, W, num_cameras=None):
         self.frame_latent_h, self.frame_latent_w = H, W
         self.context_pos.set_patch_grid(H, W)
-        self.future_pos.set_patch_grid(H, W)
+        if self.future_pos is not None:
+            self.future_pos.set_patch_grid(H, W)
         if num_cameras is not None and self.interpolate_rope:
             for block in self.blocks:
                 block.rope.set_interpolation(H, W, num_cameras)
         spatial = H * W
         self.N_ctx = self.num_context_tubelets * spatial
-        self.N_fut = self.num_future_tubelets * spatial
+        self.N_fut = 0 if self.action_only else self.num_future_tubelets * spatial
         self.build_flex_mask()
 
     def count_params(self, millions=True, trainable_only=True):

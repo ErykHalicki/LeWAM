@@ -1,0 +1,13 @@
+model_dim: 128
+depth: 4
+num_heads: 4
+num_context_frames: 4
+num_future_frames: 4
+action_dim: 6
+state_dim: 6
+vlm_model_id: null  
+vlm_num_layers: 4
+mlp_ratio: 4.0
+norm_strategy: q1_q99
+attn_block_size: 1
+action_only: false

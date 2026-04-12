@@ -226,13 +226,23 @@ def prepare_batch(model, raw_batch, num_cameras):
     return context_tokens, future_tokens, rel_velocity, state, lang_tokens, lang_mask, future_valid, action_valid
 
 
-def _masked_mse(pred, target, valid_mask):
-    """Per-element MSE, averaged only over valid (non-padded) positions."""
+def _masked_mse(pred, target, valid_mask, name=""):
+    """Per-element MSE, averaged only over valid (non-padded) positions.
+    Loudly warns and returns 0 (no gradient contribution) when the whole
+    batch is masked out, instead of silently swallowing it."""
     if valid_mask is None or valid_mask.all():
         return F.mse_loss(pred, target)
+    if not valid_mask.any():
+        per_sample = valid_mask.sum(dim=tuple(range(1, valid_mask.ndim))).tolist()
+        warnings.warn(
+            f"_masked_mse({name}): every token in the batch is padded — "
+            f"per-sample valid counts={per_sample}. Returning 0; this step "
+            f"contributes no {name} gradient.",
+            stacklevel=2,
+        )
+        return (pred * 0.0).sum()
     mask = valid_mask.unsqueeze(-1).expand_as(pred)
-    n_valid = mask.sum().clamp(min=1)
-    return (F.mse_loss(pred, target, reduction="none") * mask).sum() / n_valid
+    return (F.mse_loss(pred, target, reduction="none") * mask).sum() / mask.sum()
 
 
 def train_step(model, raw_batch, accelerator, num_cameras, action_weight=0.0, lang_drop_rate=0.0):
@@ -252,7 +262,9 @@ def train_step(model, raw_batch, accelerator, num_cameras, action_weight=0.0, la
     B = context_tokens.shape[0]
     t = torch.rand(B, device=context_tokens.device, dtype=context_tokens.dtype)
 
-    action_only = model.module.action_only if hasattr(model, "module") else model.action_only
+    m = _unwrap(model)
+    action_only = m.action_only
+    video_only = m._video_only
 
     if action_only:
         x_t_video = None
@@ -260,8 +272,11 @@ def train_step(model, raw_batch, accelerator, num_cameras, action_weight=0.0, la
         x0_video = torch.randn_like(future_tokens)
         x_t_video = (1 - t[:, None, None]) * x0_video + t[:, None, None] * future_tokens
 
-    x0_action = torch.randn_like(rel_velocity)
-    x_t_action = (1 - t[:, None, None]) * x0_action + t[:, None, None] * rel_velocity
+    if video_only:
+        x_t_action = None
+    else:
+        x0_action = torch.randn_like(rel_velocity)
+        x_t_action = (1 - t[:, None, None]) * x0_action + t[:, None, None] * rel_velocity
 
     with accelerator.autocast():
         video_vel, action_vel = model(
@@ -274,22 +289,139 @@ def train_step(model, raw_batch, accelerator, num_cameras, action_weight=0.0, la
             lang_mask=lang_mask,
         )
 
-        target_action = rel_velocity - x0_action
-        action_loss = _masked_mse(action_vel, target_action, action_valid)
+        if video_only:
+            action_loss = torch.tensor(0.0, device=context_tokens.device)
+        else:
+            target_action = rel_velocity - x0_action
+            action_loss = _masked_mse(action_vel, target_action, action_valid, name="action")
 
         if action_only:
             video_loss = torch.tensor(0.0, device=action_loss.device)
             total_loss = action_loss
         else:
             target_video = future_tokens.detach() - x0_video
-            video_loss = _masked_mse(video_vel, target_video, future_valid)
-            total_loss = video_loss + action_weight * action_loss
+            video_loss = _masked_mse(video_vel, target_video, future_valid, name="video")
+            if video_only:
+                total_loss = video_loss
+            else:
+                total_loss = video_loss + action_weight * action_loss
 
     return total_loss, {
         "total_loss": total_loss.detach(),
         "video_loss": video_loss.detach(),
-        "action_loss": action_loss.detach() * action_weight,
+        "action_loss": action_loss.detach() * (0.0 if video_only else action_weight),
     }
+
+
+def diagnose_gradient_conflict(model, raw_batch, accelerator, num_cameras):
+    """Two separate forward passes, each consumed by its own backward, so
+    gradient_checkpointing (use_reentrant=False) doesn't collide with
+    retain_graph. Measures cos sim and norm ratio of per-task gradients.
+
+    Mutates and clears model.grad. Caller must zero/restore grads for training.
+    Returns dict or None (action_only / no overlap).
+    """
+    m = _unwrap(model)
+    if m.action_only or m._video_only:
+        return None
+
+    context_tokens, future_tokens, rel_velocity, state, lang_tokens, lang_mask, future_valid, action_valid = (
+        prepare_batch(model, raw_batch, num_cameras)
+    )
+    B = context_tokens.shape[0]
+    t = torch.rand(B, device=context_tokens.device, dtype=context_tokens.dtype)
+    x0_video = torch.randn_like(future_tokens)
+    x_t_video = (1 - t[:, None, None]) * x0_video + t[:, None, None] * future_tokens
+    x0_action = torch.randn_like(rel_velocity)
+    x_t_action = (1 - t[:, None, None]) * x0_action + t[:, None, None] * rel_velocity
+    target_action = rel_velocity - x0_action
+    target_video = future_tokens.detach() - x0_video
+
+    sync_ctx = model.no_sync if hasattr(model, "no_sync") else nullcontext
+
+    def _one_task_backward(which):
+        for p in model.parameters():
+            p.grad = None
+        with sync_ctx():
+            with accelerator.autocast():
+                video_vel, action_vel = model(
+                    x_t_video=x_t_video, x_t_action=x_t_action,
+                    context_tokens=context_tokens, t=t, state=state,
+                    lang_tokens=lang_tokens, lang_mask=lang_mask,
+                )
+                if which == "action":
+                    loss = _masked_mse(action_vel, target_action, action_valid, name="action")
+                else:
+                    loss = _masked_mse(video_vel, target_video, future_valid, name="video")
+            loss.backward()
+        grads = {
+            n: p.grad.detach().clone()
+            for n, p in model.named_parameters() if p.grad is not None
+        }
+        del video_vel, action_vel, loss
+        return grads
+
+    action_grads = _one_task_backward("action")
+    for p in model.parameters():
+        p.grad = None
+    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    video_grads = _one_task_backward("video")
+    for p in model.parameters():
+        p.grad = None
+
+    shared_names = sorted(action_grads.keys() & video_grads.keys())
+    if not shared_names:
+        return None
+
+    g_a = torch.cat([action_grads[n].flatten().float() for n in shared_names])
+    g_v = torch.cat([video_grads[n].flatten().float() for n in shared_names])
+    a_norm = g_a.norm().item()
+    v_norm = g_v.norm().item()
+    cos = F.cosine_similarity(g_a.unsqueeze(0), g_v.unsqueeze(0)).item()
+
+    return {
+        "grad_cos": cos,
+        "grad_action_norm": a_norm,
+        "grad_video_norm": v_norm,
+        "grad_ratio_v_a": v_norm / max(a_norm, 1e-12),
+        "n_shared_params": len(shared_names),
+    }
+
+
+@torch.no_grad()
+def run_validation(model, val_loader, num_batches, accelerator, action_weight):
+    """Forward-only pass over ~num_batches from val_loader. Returns averaged losses or None."""
+    was_training = _unwrap(model).training
+    model.eval()
+    try:
+        acc = {"total_loss": 0.0, "video_loss": 0.0, "action_loss": 0.0}
+        n = 0
+        it = iter(val_loader)
+        for _ in range(num_batches):
+            try:
+                batch = next(it)
+            except StopIteration:
+                it = iter(val_loader)
+                try:
+                    batch = next(it)
+                except StopIteration:
+                    break
+            if batch is None:
+                continue
+            num_cams = count_cameras(batch)
+            _, losses = train_step(
+                model, batch, accelerator, num_cams,
+                action_weight=action_weight, lang_drop_rate=0.0,
+            )
+            for k in acc:
+                acc[k] += losses[k].item()
+            n += 1
+    finally:
+        if was_training:
+            model.train()
+    if n == 0:
+        return None
+    return {k: v / n for k, v in acc.items()}
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -360,6 +492,7 @@ def main():
             revision="main",
             delta_timestamps=delta_timestamps,
             image_transforms=image_tx,
+            video_backend="torchcodec",
         )
 
         accelerator.print(f"  cameras={camera_keys}  episodes={ds.num_episodes}  frames={ds.num_frames}")
@@ -384,6 +517,38 @@ def main():
 
         cd = CommunityDataset(repo_id=repo_id, cache_root=cache_root)
         cd.prefetch_metadata(delta_timestamps=delta_ts, image_transforms=image_tx)
+
+    # ── Validation dataset (optional, always LeRobot) ─────────────────
+    val_lerobot_repo_id = train_cfg.get("val_lerobot_repo_id")
+    val_ds = None
+    if val_lerobot_repo_id:
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        accelerator.print(f"Loading validation LeRobot dataset: {val_lerobot_repo_id}")
+        if accelerator.is_main_process:
+            LeRobotDataset(repo_id=val_lerobot_repo_id, revision="main", force_cache_sync=True)
+        accelerator.wait_for_everyone()
+
+        _vm = LeRobotDataset(repo_id=val_lerobot_repo_id, revision="main")
+        val_camera_keys = sorted(k for k in _vm.meta.features if k.startswith("observation.images."))
+        del _vm
+
+        val_action_horizon = int(num_future / scaled_fps * action_fps)
+        val_action_ts = [i / action_fps for i in range(val_action_horizon + 1)]
+        val_delta_timestamps = {k: past_ts + future_ts for k in val_camera_keys}
+        val_delta_timestamps["observation.state"] = [0.0]
+        val_delta_timestamps["action"] = val_action_ts
+
+        val_ds = LeRobotDataset(
+            repo_id=val_lerobot_repo_id,
+            revision="main",
+            delta_timestamps=val_delta_timestamps,
+            image_transforms=image_tx,
+            video_backend="torchcodec",
+        )
+        accelerator.print(
+            f"  val: cameras={val_camera_keys}  episodes={val_ds.num_episodes}  frames={val_ds.num_frames}"
+        )
 
     # ── Model ────────────────────────────────────────────────────────────
     latent_frame_side = crop_size // PATCH_SIZE
@@ -424,11 +589,27 @@ def main():
         )
 
         vjepa2_path = os.path.join(cache_root, "vjepa2_1_vitb_dist_vitG_384.pt")
-        if os.path.exists(vjepa2_path):
-            accelerator.print("Loading VJEPA2 weights...")
-            model.load_vjepa2_weights(vjepa2_path)
-        else:
-            accelerator.print("VJEPA2 weights not found, using random init")
+        if not os.path.exists(vjepa2_path):
+            raise FileNotFoundError(
+                f"VJEPA2 weights not found at {vjepa2_path}. "
+                "Training from a random VJEPA2 init is not allowed."
+            )
+        accelerator.print("Loading VJEPA2 weights...")
+        model.load_vjepa2_weights(vjepa2_path)
+
+    _video_only_cfg = bool(train_cfg.get("video_only", False))
+    if _video_only_cfg and model.action_only:
+        raise ValueError(
+            "Cannot enable both video_only (training flag) and action_only (model flag). "
+            "action_only removes the video head from the architecture, so there is nothing "
+            "left to train with video_only."
+        )
+    if _video_only_cfg:
+        model.set_video_only_mode(True)
+        accelerator.print(
+            "VIDEO-ONLY MODE: action tokens dropped from sequence; "
+            "action_encoder/action_final frozen."
+        )
 
     accelerator.print(f"Trainable params: {model.count_params()}M | Total params: {model.count_params(trainable_only=False)}M")
 
@@ -437,7 +618,12 @@ def main():
         accelerator.print("Gradient checkpointing enabled")
 
     if accelerator.is_main_process:
-        LeWAM.visualize_attn_mask(model.num_context_tubelets, model.num_future_tubelets, model.action_horizon)
+        LeWAM.visualize_attn_mask(
+            model.num_context_tubelets,
+            0 if model.action_only else model.num_future_tubelets,
+            0 if model._video_only else model.action_horizon,
+            block_size=model.attn_block_size,
+        )
 
     # ── Optimizer ─────────────────────────────────────────────────────────
     trainable = [p for p in model.parameters() if p.requires_grad]
@@ -520,9 +706,18 @@ def main():
     torch.cuda.empty_cache()
     optimizer = torch.optim.AdamW(trainable, lr=train_cfg["lr"], betas=(0.9, 0.95), eps=1e-7)
     if _optimizer_state is not None:
-        optimizer.load_state_dict(_optimizer_state)
-        for g in optimizer.param_groups:
-            g.pop("initial_lr", None)
+        saved_sizes = [len(g["params"]) for g in _optimizer_state["param_groups"]]
+        current_sizes = [len(g["params"]) for g in optimizer.param_groups]
+        if saved_sizes != current_sizes:
+            accelerator.print(
+                f"Skipping optimizer state load: trainable param count changed "
+                f"(saved={saved_sizes}, current={current_sizes}). "
+                f"Likely a video_only ↔ joint mode switch. Starting optimizer from scratch."
+            )
+        else:
+            optimizer.load_state_dict(_optimizer_state)
+            for g in optimizer.param_groups:
+                g.pop("initial_lr", None)
         _optimizer_state = None
 
     # ── Compile + Accelerate prepare ─────────────────────────────────────
@@ -556,17 +751,25 @@ def main():
             scheduler.step()
 
     # ── Dataloaders ───────────────────────────────────────────────────────
+    def _prep_loader(dl):
+        dl = accelerator.prepare(dl)
+        # Workaround for accelerate bug: persistent_workers + re-iter triggers
+        # synchronize_rng_states with a corrupted mt19937 state. Disable RNG sync.
+        if hasattr(dl, "rng_types"):
+            dl.rng_types = []
+        return dl
+
     if use_lerobot:
         def _build_data_iter():
             common_kwargs = dict(
                 num_workers=train_cfg["num_workers"],
                 prefetch_factor=2 if train_cfg["num_workers"] > 0 else None,
-                persistent_workers=train_cfg["num_workers"] > 0,
+                persistent_workers=False,
                 collate_fn=_collate_skip_none,
                 pin_memory=True,
                 shuffle=True,
             )
-            loader = accelerator.prepare(
+            loader = _prep_loader(
                 DataLoader(_SafeDataset(ds), batch_size=batch_sizes[num_cameras], **common_kwargs)
             )
             while True:
@@ -580,18 +783,31 @@ def main():
             common_kwargs = dict(
                 num_workers=train_cfg["num_workers"],
                 prefetch_factor=2 if train_cfg["num_workers"] > 0 else None,
-                persistent_workers=train_cfg["num_workers"] > 0,
+                persistent_workers=False,
                 collate_fn=_collate_skip_none,
                 pin_memory=True,
                 shuffle=True,
             )
             loaders = {
-                n: accelerator.prepare(DataLoader(_SafeDataset(ds), batch_size=batch_sizes[n], **common_kwargs))
+                n: _prep_loader(DataLoader(_SafeDataset(ds), batch_size=batch_sizes[n], **common_kwargs))
                 for n, ds in cd.datasets.items()
             }
             return _infinite_interleaved(loaders, accelerator)
 
         data_iter = _build_data_iter()
+
+    val_loader = None
+    if val_ds is not None:
+        val_loader = accelerator.prepare(
+            DataLoader(
+                _SafeDataset(val_ds),
+                batch_size=batch_sizes[num_cameras],
+                num_workers=0,
+                collate_fn=_collate_skip_none,
+                pin_memory=True,
+                shuffle=True,
+            )
+        )
 
     # ── Output dir ────────────────────────────────────────────────────────
     run_tag = train_cfg.get("run_tag") or f"lewam-{accelerator.unwrap_model(model).count_params()}M"
@@ -657,6 +873,7 @@ def main():
     _loss_acc = {k: 0.0 for k in ("total_loss", "video_loss", "action_loss")}
     _micro_count = 0
     _samples_acc = 0
+    _data_secs_acc = 0.0
     samples_per_gpu = SAMPLES_PER_STEP // NUM_GPUS
 
     accelerator.print(f"Training {run_tag} for {steps} steps...")
@@ -668,7 +885,9 @@ def main():
     last_saved_step = None
     while step < steps:
         if not train_cfg["overfit_test"]:
+            _t_data = time.time()
             raw = next(data_iter)
+            _data_secs_acc += time.time() - _t_data
 
         num_cams = count_cameras(raw)
         _samples_acc += batch_sizes[num_cams]
@@ -702,9 +921,11 @@ def main():
 
         entry = {k: _loss_acc[k] / _micro_count for k in _loss_acc} | {"step": step}
         loss_log.append(entry)
+        _data_secs_step = _data_secs_acc
         _loss_acc = {k: 0.0 for k in _loss_acc}
         _micro_count = 0
         _samples_acc = 0
+        _data_secs_acc = 0.0
 
         steps_done = step - _t0_step
         secs_per_step = (time.time() - t0) / max(steps_done, 1)
@@ -722,10 +943,50 @@ def main():
             f"lr={current_lr:.2e}  "
             f"grad_norm={global_grad_norm:.2f}  "
             f"sec_per_step={secs_per_step:.2f}s  "
+            f"data_secs={_data_secs_step:.2f}s  "
             f"eta={eta_delta} ({finish_str})"
         )
 
         if step % save_every == 0 or step == steps or step == 5:
+            if val_loader is not None:
+                val_metrics = run_validation(
+                    model, val_loader,
+                    num_batches=int(train_cfg.get("val_batches", 5)),
+                    accelerator=accelerator,
+                    action_weight=action_weight,
+                )
+                if val_metrics is not None:
+                    entry["val_total_loss"] = val_metrics["total_loss"]
+                    entry["val_video_loss"] = val_metrics["video_loss"]
+                    entry["val_action_loss"] = val_metrics["action_loss"]
+                    accelerator.print(
+                        f"  val: total={val_metrics['total_loss']:.4f}  "
+                        f"video={val_metrics['video_loss']:.4f}  "
+                        f"action={val_metrics['action_loss']:.4f}"
+                    )
+
+            try:
+                grad_metrics = diagnose_gradient_conflict(model, raw, accelerator, num_cams)
+            except torch.cuda.OutOfMemoryError as e:
+                accelerator.print(f"  grad diagnostic OOM, skipping: {e}")
+                grad_metrics = None
+                for p in model.parameters():
+                    p.grad = None
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            if grad_metrics is not None:
+                entry["grad_cos"] = grad_metrics["grad_cos"]
+                entry["grad_action_norm"] = grad_metrics["grad_action_norm"]
+                entry["grad_video_norm"] = grad_metrics["grad_video_norm"]
+                entry["grad_ratio_v_a"] = grad_metrics["grad_ratio_v_a"]
+                accelerator.print(
+                    f"  grad: cos={grad_metrics['grad_cos']:+.3f}  "
+                    f"||a||={grad_metrics['grad_action_norm']:.3e}  "
+                    f"||v||={grad_metrics['grad_video_norm']:.3e}  "
+                    f"v/a={grad_metrics['grad_ratio_v_a']:.2f}"
+                )
+            optimizer.zero_grad()
+
             save_checkpoint(step)
             last_saved_step = step
             t0 = time.time()

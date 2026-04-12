@@ -31,7 +31,7 @@ The following section describes results from early experiments. The architecture
     \label{fig:ode_viz}
 \end{figure}
 
-Early experiments have shown the model is able to reasonably denoise future video latents and actions using a single DiT, however video latent predictions have suffered from a bit of mode collapse, with the model predicting very little variation from the most recent context frame. (See Figure ~\ref{ode_viz})
+Early experiments have shown the model is able to reasonably denoise future video latents and actions using a single DiT, however video latent predictions have suffered from a bit of mode collapse, with the model predicting very little variation from the most recent context frame. (See Figure~\ref{fig:ode_viz})
 
 Action denoising was more successful, with the model being able to learn a reasonable conditional distribution during fine tuning, however real world rollouts showed mixed results. The policy was able to generate reasonable actions, but achieved limited task success rates ($<$ 10\%)
 
@@ -57,3 +57,25 @@ Overall, early experiments have led to the revision of the architecture to more 
 
 The next round of experiments will focus on verifying the model architecture in single task settings before moving onto multi task, and then pretraining and other experiments. 
 
+% [TODO: should i even mention v0.1 and v0.2 and other initial experiments that failed?]
+%- first training run 
+%    - 16.8s per step, 18k steps, 64 batch
+%    - rtx 6000s on vast.ai
+%    - pretraining on communoty dataset
+%    - 1.0 action loss weight
+%    - no competent behaviour in rollout
+
+%- second training run:
+%    - 5.5 sec per step, 10k steps, ~15x4=60 gpu hours (4gpus), 64 batch
+%    - 4x5090 on vast.ai
+%    - fine tuning on multi task dataset on my So101
+%    - 2.0 action weight 
+%    - overfitting to tasks
+%    - more robot like motions, but no task success
+%
+%- third training run:
+%    - 12 sec per step 5k steps 16x4=64 gpu hours, 240 batch
+%    - 4x5080 on vast.ai 
+%    - fine tuning on multi task dataset, with 60 more episodes than trainnig run 2
+%    - 2.0 action weight
+%    - 0.5% success rate, managed to pick up a cube twice over the course of an hour

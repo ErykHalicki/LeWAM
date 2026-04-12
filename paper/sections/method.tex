@@ -2,7 +2,7 @@
 
 \subsection{Overview}
 
-LeWAM jointly predicts future video latents and robot actions using a single conditional flow-matching Diffusion Transformer~\cite{DiT, FlowMatching, esser2024scaling}, following the joint video-action denoising approach of ~\citet{DreamZero}, \citet{UWM}, and \citet{CosmosPolicy}. However, LeWAM denoises video latents from a JEPA video encoder rather than the VAE latents used by most other WAMs.
+LeWAM jointly predicts future video latents and robot actions using a single conditional flow-matching Diffusion Transformer~\cite{DiT, FlowMatching, esser2024scaling}, following the joint video-action denoising approach of ~\citet{DreamZero}, \citet{UWM}, and \citet{CosmosPolicy}. Rather than the VAE latents used by most other WAMs, our proposed method denoises video latents from a JEPA video encoder.
 
 The model processes a sequence of three token groups: (1) \textbf{context video tokens} (clean), (2) \textbf{future video tokens} (noisy), and (3) \textbf{action tokens} (noisy), with a block-causal attention mask that enforces temporal ordering.
 A frozen V-JEPA~2.1 encoder~\cite{vjepa2_1} provides the video representation used for both context and future ground truth. Additionally, a frozen SmolVLM2~\cite{SmolVLM2, SmolVLA} and an unfrozen state encoder provide visually-grounded language and state conditioning via cross-attention~\cite{GenTron}.

@@ -250,7 +250,7 @@ def save_ode_viz(
     fut_frames = all_frames[:, :, model.num_context_frames:]
 
     context_tokens = model.encode_video(ctx_frames)
-    future_tokens = model.encode_video(fut_frames)
+    future_tokens = None if model.action_only else model.encode_video(fut_frames)
 
     state = s["observation.state"].to(dtype=dtype).squeeze(1)
     state = model.normalize_state(state)
@@ -269,7 +269,8 @@ def save_ode_viz(
     pred_vid, pred_act = model.ode_solve(
         context_tokens, state, lang_tokens, lang_mask, num_steps=num_ode_steps,
     )
-    pred_act_smooth = model.smooth_actions(pred_act)
+    video_only = getattr(model, "_video_only", False)
+    pred_act_smooth = None if video_only else model.smooth_actions(pred_act)
 
     patch_h, patch_w = model.frame_latent_h, model.frame_latent_w
     T_emb = model.num_future_tubelets
@@ -290,29 +291,33 @@ def save_ode_viz(
     rgb_frames = [raw_fut[i].permute(1, 2, 0).clamp(0, 1).numpy() for i in stride_idx if i < raw_fut.shape[0]]
     T_show = len(rgb_frames)
 
-    token_list = [
-        future_tokens[0].float().cpu(),
-        pred_vid[0].float().cpu(),
-    ]
-    pca_grids = embed_pca_rgb(token_list, T_emb, patch_h, patch_w)
-    gt_emb_frames = pca_grids[0]
-    pred_emb_frames = pca_grids[1]
+    if model.action_only:
+        gt_emb_frames = pred_emb_frames = None
+    else:
+        token_list = [
+            future_tokens[0].float().cpu(),
+            pred_vid[0].float().cpu(),
+        ]
+        pca_grids = embed_pca_rgb(token_list, T_emb, patch_h, patch_w)
+        gt_emb_frames = pca_grids[0]
+        pred_emb_frames = pca_grids[1]
 
     action_dim = gt_rel.shape[-1]
     n_act_rows = _math.ceil(action_dim / 3)
     n_act_cols = min(action_dim, 3)
     max_cols = max(T_ctx_show, T_show, T_emb)
     fig_w = max(2.5 * max_cols, 10.0)
-    fig_h = 12.0 + 1.5 * n_act_rows
+    fig_h = 12.0 if video_only else 12.0 + 1.5 * n_act_rows
     fig = plt.figure(figsize=(fig_w, fig_h))
 
     img_top = 0.94
-    img_bottom = 0.94 - 0.60 * (12.0 / fig_h)
+    img_bottom = 0.04 if video_only else 0.94 - 0.60 * (12.0 / fig_h)
     act_top = img_bottom - 0.04 * (12.0 / fig_h)
     act_bottom = 0.04
 
-    gs_img = _GS(4, max_cols, figure=fig, top=img_top, bottom=img_bottom, hspace=0.06, wspace=0.04)
-    gs_act = _GS(n_act_rows, n_act_cols, figure=fig, top=act_top, bottom=act_bottom, hspace=0.55, wspace=0.4)
+    n_img_rows = 2 if model.action_only else 4
+    gs_img = _GS(n_img_rows, max_cols, figure=fig, top=img_top, bottom=img_bottom, hspace=0.06, wspace=0.04)
+    gs_act = None if video_only else _GS(n_act_rows, n_act_cols, figure=fig, top=act_top, bottom=act_bottom, hspace=0.55, wspace=0.4)
 
     for t in range(T_ctx_show):
         ax = fig.add_subplot(gs_img[0, t])
@@ -330,35 +335,37 @@ def save_ode_viz(
         if t == 0:
             ax.set_ylabel("ground-truth frame", fontsize=7)
 
-    for t in range(T_emb):
-        ax = fig.add_subplot(gs_img[2, t])
-        ax.imshow(gt_emb_frames[t])
-        ax.set_xticks([]); ax.set_yticks([])
-        if t == 0:
-            ax.set_ylabel("ground-truth latent frame", fontsize=7)
+    if not model.action_only:
+        for t in range(T_emb):
+            ax = fig.add_subplot(gs_img[2, t])
+            ax.imshow(gt_emb_frames[t])
+            ax.set_xticks([]); ax.set_yticks([])
+            if t == 0:
+                ax.set_ylabel("ground-truth latent frame", fontsize=7)
 
-    for t in range(T_emb):
-        ax = fig.add_subplot(gs_img[3, t])
-        ax.imshow(pred_emb_frames[t])
-        ax.set_xticks([]); ax.set_yticks([])
-        if t == 0:
-            ax.set_ylabel("predicted latent frame", fontsize=7)
+        for t in range(T_emb):
+            ax = fig.add_subplot(gs_img[3, t])
+            ax.imshow(pred_emb_frames[t])
+            ax.set_xticks([]); ax.set_yticks([])
+            if t == 0:
+                ax.set_ylabel("predicted latent frame", fontsize=7)
 
-    gt_np = gt_rel[0].float().cpu().numpy()
-    pred_np = pred_act[0].float().cpu().numpy()
-    pred_smooth_np = pred_act_smooth[0].float().cpu().numpy()
-    xs = range(gt_rel.shape[1])
-    for d in range(action_dim):
-        r, c = divmod(d, n_act_cols)
-        ax = fig.add_subplot(gs_act[r, c])
-        ax.plot(xs, gt_np[:, d], label="gt", linewidth=1.2)
-        ax.plot(xs, pred_np[:, d], label="pred", linewidth=1.0, linestyle="--", alpha=0.5)
-        ax.plot(xs, pred_smooth_np[:, d], label="pred (smooth)", linewidth=1.2, linestyle="-.")
-        ax.set_ylim(-3, 3)
-        ax.set_title(f"action dim {d}", fontsize=7)
-        ax.tick_params(labelsize=6)
-        if d == 0:
-            ax.legend(fontsize=6)
+    if not video_only:
+        gt_np = gt_rel[0].float().cpu().numpy()
+        pred_np = pred_act[0].float().cpu().numpy()
+        pred_smooth_np = pred_act_smooth[0].float().cpu().numpy()
+        xs = range(gt_rel.shape[1])
+        for d in range(action_dim):
+            r, c = divmod(d, n_act_cols)
+            ax = fig.add_subplot(gs_act[r, c])
+            ax.plot(xs, gt_np[:, d], label="gt", linewidth=1.2)
+            ax.plot(xs, pred_np[:, d], label="pred", linewidth=1.0, linestyle="--", alpha=0.5)
+            ax.plot(xs, pred_smooth_np[:, d], label="pred (smooth)", linewidth=1.2, linestyle="-.")
+            ax.set_ylim(-3, 3)
+            ax.set_title(f"action dim {d}", fontsize=7)
+            ax.tick_params(labelsize=6)
+            if d == 0:
+                ax.legend(fontsize=6)
 
     label = s["task"][0] if isinstance(s["task"], list) else str(s["task"])
     plt.suptitle(f'ODE ({num_ode_steps} steps) -- step {step}\n"{label}"', fontsize=9)

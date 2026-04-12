@@ -1,14 +1,14 @@
 ## Implementation
 
+
+- figure out why the data loading is so slow????
+
+- start a single task training run action_only
+- start a single task training run video_only
+- jointly fine tune the video only checkpoint
+- evaluate in real life
+
 - reach out to mees for feedback
-
-- double check if theres anything left to change for v0.3
-
-- try running a dummy training run on 1 episode of cube pick and place.
-- collect more cube episodes
-- start a single task training run action_only cube task only
-
-- test new changes
 
 - specify that we use a relative joint space delta action space in the paper
 

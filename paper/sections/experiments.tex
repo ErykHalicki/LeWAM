@@ -1,64 +1,41 @@
 \section{Experiments}
 
-
-
-% [TODO: should i even mention v0.1 and v0.2 and other initial experiments that failed?]
-%- first training run 
-%    - 16.8s per step, 18k steps, 64 batch
-%    - rtx 6000s on vast.ai
-%    - pretraining on communoty dataset
-%    - 1.0 action loss weight
-%    - no competent behaviour in rollout
-
-%- second training run:
-%    - 5.5 sec per step, 10k steps, ~15x4=60 gpu hours (4gpus), 64 batch
-%    - 4x5090 on vast.ai
-%    - fine tuning on multi task dataset on my So101
-%    - 2.0 action weight 
-%    - overfitting to tasks
-%    - more robot like motions, but no task success
-%
-%- third training run:
-%    - 12 sec per step 5k steps 16x4=64 gpu hours, 240 batch
-%    - 4x5080 on vast.ai 
-%    - fine tuning on multi task dataset, with 60 more episodes than trainnig run 2
-%    - 2.0 action weight
-%    - 0.5% success rate, managed to pick up a cube twice over the course of an hour
+[TODO: the final set of experiments is still being decided; the descriptions below outline candidate directions]
 
 \subsection{Real World Tasks}
-[TODO: add real world evaluation on the same tasks SmolVLA did, plus maybe some zero-shot evalutation like DreamZero]
-[TODO: fine tune SmolVLA, ACT, Diffusion policy]
+
+We plan to evaluate on the same real world manipulation tasks as SmolVLA, with SmolVLA, ACT, and a diffusion policy as baselines. We also want to test zero-shot generalization in the style of DreamZero on tasks not seen during fine tuning.
 
 \subsection{LIBERO}
-[TODO: add LIBERO evaluation for standardized comparison]
+
+We plan to report results on LIBERO as a standardized benchmark, for more direct comparison against prior work.
 
 \subsection{Ablations}
 
 \subsubsection{World Modelling Objective}
 
-[TODO: does the video latent prediction objective help? If so, when does it help? (single task, multi task, with or without pretraining)]
+Does the video latent prediction objective help, and when? We want to measure its effect in the single task and multi task regimes, with and without pretraining.
 
 \subsubsection{JEPA vs Video VAE vs Pixel Space}
 
-[TODO: does using a video JEPA backbone improve performance over adopting a videoVAE like other diffusion models]
-
-[TODO: Is using pixel space diffusion comparable at this scale?]
+Does a V-JEPA2 backbone actually help, or would a similarly sized video VAE work just as well? Candidate drop-in replacements include the CogVideoX VAE, OmniTokenizer-VAE, and Cosmos-Tokenizer-CV. We also want to check whether pixel space diffusion is competitive at this scale.
 
 \subsubsection{Pretraining}
 
-[TODO: does pretraining on community data help downstream performance?]
+Does pretraining on community data improve downstream task performance compared to training from scratch?
 
-\subsubsection{Divese Data}
+\subsubsection{Diverse Data}
 
-[TODO: does fine tuning on diverse data improve performance due to cross task generalization?]
+Does fine tuning on diverse tasks lead to cross task generalization relative to single task fine tuning?
 
 \subsection{Cross-Embodiment Transfer}
-[TODO: can the model learn to do tasks that are OOD by training on video-only data from different embodiments or even ego centric human data?]
+
+Can the model learn out of distribution tasks from video-only data on different embodiments, including egocentric human video?
 
 \subsection{Classifier Free Guidance}
-[TODO: DreamZero uses CFG, does it help performance or noticably change the way the policy behaves?]
+
+DreamZero uses CFG at inference. Does it help here, and does it change how the policy behaves?
 
 \subsection{Continual Learning}
-[TODO: Can the video prediction improve from the models own rollouts?]
 
-
+Can the video prediction component keep improving from the policy's own rollouts?
