@@ -11,18 +11,19 @@ base_batch_size: 32
 lr: 5.0e-5
 warmup_steps: 200
 crop_size: 256
-num_workers: 16
-save_every: 50
+num_workers: 4
+save_every: 200
 small_dataset: false # runs on lewam_community_dataset_small
-resume: null
-s3_path: s3://zima-data/lewam/checkpoints
+resume: cube_single_task/cube_single_task_latest.pt
+s3_path: s3://lewam/checkpoints
 scaled_fps: 5
 action_fps: 30
 overfit_test: false 
 timezone: Europe/Zurich
-action_weight: 1.0 # not sure what this should be tbh
+action_weight: 0.25
 lang_drop_rate: 0.0
 force_batch_size: null
+vram_target_fraction: 0.85
 no_compile: true
 gradient_checkpointing: true
-video_only: true
+video_only: false

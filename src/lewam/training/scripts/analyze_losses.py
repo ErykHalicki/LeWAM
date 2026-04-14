@@ -16,8 +16,14 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 
+def _nz_mean(x):
+    mask = x != 0.0
+    return x[mask].mean() if mask.any() else float("nan")
+
+
 def analyze(data):
     steps = [d["step"] for d in data]
+    steps_arr = np.array(steps, dtype=float)
     total = np.array([d["total_loss"] for d in data])
     video = np.array([d["video_loss"] for d in data])
     action = np.array([d["action_loss"] for d in data])
@@ -38,12 +44,12 @@ def analyze(data):
     prev_total = None
     prev_mid_step = None
     for s, e in windows:
-        t_mean = total[s:e].mean()
-        v_mean = video[s:e].mean()
-        a_mean = action[s:e].mean()
+        t_mean = _nz_mean(total[s:e])
+        v_mean = _nz_mean(video[s:e])
+        a_mean = _nz_mean(action[s:e])
         mid_step = (steps[s] + steps[min(e - 1, n - 1)]) / 2
         rate = ""
-        if prev_total is not None:
+        if prev_total is not None and not np.isnan(t_mean) and not np.isnan(prev_total):
             rate = f"{(t_mean - prev_total) / (mid_step - prev_mid_step) * 1000:.4f}"
         prev_total = t_mean
         prev_mid_step = mid_step
@@ -51,46 +57,58 @@ def analyze(data):
 
     tail = min(500, n // 2)
     if tail >= 10:
-        recent = data[-tail:]
-        rs = np.array([d["step"] for d in recent])
+        recent_steps = steps_arr[-tail:]
         print(f"\nLinear trend (last {tail} steps):")
-        for name, key in [("total", "total_loss"), ("video", "video_loss"), ("action", "action_loss")]:
-            vals = np.array([d[key] for d in recent])
-            slope = np.polyfit(rs, vals, 1)[0] * 1000
+        for name, vals_all in [("total", total[-tail:]), ("video", video[-tail:]), ("action", action[-tail:])]:
+            mask = vals_all != 0.0
+            if mask.sum() < 2:
+                print(f"  {name:>8} slope: n/a (no nonzero samples)")
+                continue
+            slope = np.polyfit(recent_steps[mask], vals_all[mask], 1)[0] * 1000
             direction = "decreasing" if slope < 0 else "increasing/flat"
             print(f"  {name:>8} slope: {slope:+.4f}/1k steps ({direction})")
 
     if n >= 40:
         half = n // 2
-        early_mean = total[:half].mean()
-        late_mean = total[half:].mean()
-        early_std = total[:half].std()
-        late_std = total[half:].std()
-        improvement = (early_mean - late_mean) / early_mean * 100
-        print(f"\nFirst half mean: {early_mean:.4f} (std {early_std:.4f})")
-        print(f"Second half mean: {late_mean:.4f} (std {late_std:.4f})")
-        print(f"Improvement: {improvement:.1f}%")
+        early = total[:half]
+        late = total[half:]
+        early_nz = early[early != 0.0]
+        late_nz = late[late != 0.0]
+        if len(early_nz) and len(late_nz):
+            early_mean = early_nz.mean()
+            late_mean = late_nz.mean()
+            early_std = early_nz.std()
+            late_std = late_nz.std()
+            improvement = (early_mean - late_mean) / early_mean * 100
+            print(f"\nFirst half mean: {early_mean:.4f} (std {early_std:.4f})")
+            print(f"Second half mean: {late_mean:.4f} (std {late_std:.4f})")
+            print(f"Improvement: {improvement:.1f}%")
 
-        if late_std < early_std * 0.5 and improvement < 5:
-            print("WARNING: Loss variance dropping with little improvement - possible plateau")
-        elif improvement < 2:
-            print("WARNING: Minimal improvement between halves - may be plateauing")
-        else:
-            print("Loss still actively decreasing")
+            if late_std < early_std * 0.5 and improvement < 5:
+                print("WARNING: Loss variance dropping with little improvement - possible plateau")
+            elif improvement < 2:
+                print("WARNING: Minimal improvement between halves - may be plateauing")
+            else:
+                print("Loss still actively decreasing")
 
     def power_law_with_floor(s, a, b, c):
         return a * np.power(s, -b) + c
 
-    steps_arr = np.array(steps, dtype=float)
     milestones = [10_000, 25_000, 50_000, 100_000, 200_000]
     header = f"{'':>10} {'floor':>8}" + "".join(f"  {s//1000:>5}k" for s in milestones)
     print(f"\nChinchilla fit: L(s) = a * s^(-b) + c")
     print(header)
     for name, losses in [("total", total), ("video", video), ("action", action)]:
+        mask = losses != 0.0
+        if mask.sum() < 3:
+            print(f"  {name:>8} fit skipped (no nonzero samples)")
+            continue
+        fit_steps = steps_arr[mask]
+        fit_losses = losses[mask]
         try:
-            p0 = [losses[0], 0.5, losses[-1] * 0.5]
+            p0 = [fit_losses[0], 0.5, fit_losses[-1] * 0.5]
             bounds = ([0, 0, 0], [np.inf, 5, np.inf])
-            popt, _ = curve_fit(power_law_with_floor, steps_arr, losses, p0=p0, bounds=bounds, maxfev=10000)
+            popt, _ = curve_fit(power_law_with_floor, fit_steps, fit_losses, p0=p0, bounds=bounds, maxfev=10000)
             a, b, c = popt
             projs = "".join(f"  {power_law_with_floor(s, a, b, c):>7.4f}" for s in milestones)
             print(f"  {name:>8} {c:>8.4f}{projs}")

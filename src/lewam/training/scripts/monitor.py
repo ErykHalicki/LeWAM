@@ -22,7 +22,7 @@ from scipy.optimize import curve_fit
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("run_tag")
-    parser.add_argument("--s3-path", default="s3://zima-data/lewam/checkpoints")
+    parser.add_argument("--s3-path", default="s3://lewam/checkpoints")
     parser.add_argument("--smooth", type=int, default=50)
     parser.add_argument("--ode-step", type=int, default=None,
                         help="Specific training step to visualize (e.g. 1500 → ode-step1500.png). "
@@ -46,11 +46,13 @@ def main():
         capture_output=True, text=True,
     )
     warmup_steps = 0
+    action_weight = 1.0
     if cfg_result.returncode == 0:
         with open(config_local) as f:
             run_cfg = json.load(f)
         warmup_steps = int(run_cfg.get("train", {}).get("warmup_steps", 0))
-        print(f"  warmup_steps={warmup_steps}")
+        action_weight = float(run_cfg.get("train", {}).get("action_weight", 1.0))
+        print(f"  warmup_steps={warmup_steps}  action_weight={action_weight}")
     else:
         print(f"  config.json not found ({cfg_result.stderr.strip()})")
 
@@ -101,7 +103,7 @@ def main():
     steps = np.array([d["step"] for d in data], dtype=float)
     total_losses = np.array([d["total_loss"] for d in data], dtype=float)
     video_losses = np.array([d["video_loss"] for d in data], dtype=float)
-    action_losses = np.array([d["action_loss"] for d in data], dtype=float)
+    action_losses = np.array([d["action_loss"] for d in data], dtype=float) / action_weight
 
     val_steps, val_total, val_video, val_action = [], [], [], []
     for d in data:
@@ -109,7 +111,7 @@ def main():
             val_steps.append(d["step"])
             val_total.append(d["val_total_loss"])
             val_video.append(d["val_video_loss"])
-            val_action.append(d["val_action_loss"])
+            val_action.append(d["val_action_loss"] / action_weight)
 
     print(f"Steps: {int(steps[0])} - {int(steps[-1])} ({len(steps)} entries)")
     print(f"Latest: total={total_losses[-1]:.4f}  video={video_losses[-1]:.4f}  action={action_losses[-1]:.4f}")
@@ -122,7 +124,6 @@ def main():
     _, ax = plt.subplots(figsize=(8, 8))
 
     series = [
-        (total_losses, "steelblue", "total"),
         (video_losses, "green", "video"),
         (action_losses, "orange", "action"),
     ]
@@ -145,7 +146,6 @@ def main():
 
     if val_steps:
         for vals, color, name in [
-            (val_total, "steelblue", "val total"),
             (val_video, "green", "val video"),
             (val_action, "orange", "val action"),
         ]:
@@ -155,14 +155,17 @@ def main():
     def power_law_with_floor(s, a, b, c):
         return a * np.power(s, -b) + c
 
-    half_step = steps[len(steps) // 2] if len(steps) else 0
     for arr, color, name in series:
+        nz_steps = steps[arr != 0.0]
+        if nz_steps.size == 0:
+            continue
+        half_step = nz_steps[len(nz_steps) // 2]
         fit_mask = (steps >= half_step) & (arr != 0.0)
         fit_steps = steps[fit_mask]
         fit_arr = arr[fit_mask]
         if fit_steps.size < 5:
             continue
-        proj_steps = np.logspace(np.log10(fit_steps[0]), np.log10(2.5e4), 200)
+        proj_steps = np.logspace(np.log10(fit_steps[0]), np.log10(2e5), 200)
         try:
             p0 = [fit_arr[0], 0.5, fit_arr[-1] * 0.5]
             bounds = ([0, 0, 0], [np.inf, 5, np.inf])
@@ -177,7 +180,7 @@ def main():
 
     ax.legend()
     ax.set_xscale("log")
-    ax.set_xlim(left=10, right=2.5e4)
+    ax.set_xlim(left=10, right=2e5)
     ax.set_xlabel("step (log)")
     ax.set_ylabel("loss")
     ax.set_title(f"{args.run_tag} -- {len(steps)} steps")

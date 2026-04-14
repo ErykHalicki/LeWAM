@@ -499,7 +499,7 @@ def main():
     else:
         from lewam.datasets.community_dataset import CommunityDataset
 
-        dataset_suffix = "_small" if train_cfg["small_dataset"] else ""
+        dataset_suffix = "_small" if train_cfg["small_dataset"] else "_preprocessed"
         repo_id = f"ehalicki/LeWAM_community_dataset{dataset_suffix}"
 
         action_ts = [i / action_fps for i in range(int(num_future / scaled_fps * action_fps) + 1)]
@@ -661,7 +661,8 @@ def main():
                 optimizer.zero_grad()
 
             batch_size = find_max_batch_size(
-                _try_batch, target_fraction=0.875, device_idx=accelerator.local_process_index,
+                _try_batch, target_fraction=train_cfg["vram_target_fraction"],
+                device_idx=accelerator.local_process_index,
             )
             optimizer.zero_grad()
 
@@ -696,7 +697,8 @@ def main():
                     optimizer.zero_grad()
 
                 batch_sizes[n_cams] = find_max_batch_size(
-                    _try_batch, target_fraction=0.925, device_idx=accelerator.local_process_index,
+                    _try_batch, target_fraction=train_cfg["vram_target_fraction"],
+                    device_idx=accelerator.local_process_index,
                 )
             optimizer.zero_grad()
 
@@ -764,10 +766,11 @@ def main():
             common_kwargs = dict(
                 num_workers=train_cfg["num_workers"],
                 prefetch_factor=2 if train_cfg["num_workers"] > 0 else None,
-                persistent_workers=False,
+                persistent_workers=train_cfg["num_workers"] > 0,
                 collate_fn=_collate_skip_none,
                 pin_memory=True,
                 shuffle=True,
+                multiprocessing_context="forkserver" if train_cfg["num_workers"] > 0 else None,
             )
             loader = _prep_loader(
                 DataLoader(_SafeDataset(ds), batch_size=batch_sizes[num_cameras], **common_kwargs)
@@ -783,10 +786,11 @@ def main():
             common_kwargs = dict(
                 num_workers=train_cfg["num_workers"],
                 prefetch_factor=2 if train_cfg["num_workers"] > 0 else None,
-                persistent_workers=False,
+                persistent_workers=train_cfg["num_workers"] > 0,
                 collate_fn=_collate_skip_none,
                 pin_memory=True,
                 shuffle=True,
+                multiprocessing_context="forkserver" if train_cfg["num_workers"] > 0 else None,
             )
             loaders = {
                 n: _prep_loader(DataLoader(_SafeDataset(ds), batch_size=batch_sizes[n], **common_kwargs))

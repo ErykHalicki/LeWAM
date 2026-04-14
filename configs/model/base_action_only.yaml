@@ -10,5 +10,5 @@ vlm_num_layers: 16
 mlp_ratio: 4.0
 norm_strategy: q1_q99
 attn_block_size: 1
-action_only: false
+action_only: true
 

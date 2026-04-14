@@ -1,14 +1,15 @@
 ## Implementation
 
-
-- figure out why the data loading is so slow????
-
-- start a single task training run action_only
 - start a single task training run video_only
+    - 11k steps - done 
 - jointly fine tune the video only checkpoint
+    - 10k steps - ongoing
 - evaluate in real life
+- start a single task training run action_only
+    - 20k steps to match video + joint fine tune compute
+    - ongoing
 
-- reach out to mees for feedback
+- reach out to mees / alexey / jonas / other phd? for feedback
 
 - specify that we use a relative joint space delta action space in the paper
 
@@ -18,12 +19,9 @@
 
 - run the teacher forcing ablation from mimic video 
     - if we provide ground truth future latents, how good is the models implicit IDM? 
-    - can it relaibly generate the correct actions that caused a specific video sequence?
+        - this wont work unless we do different denoising schedules for actions vs video
+    - can it reliably generate the correct actions that caused a specific video sequence?
 
-
-- add model size specifications to the paper
-    - i think this goes in the experiments section though, since the method should be size agnostic
-    - maybe remove the 224x224 and 14x14 numbers from the method then, since the resolution and stuff will be part of the experiments / ablations
 
 - make a front page visualization for the paper
     - Video Latents + Language + State -> DiT -> Future Video Latents + Future Actions
@@ -35,10 +33,7 @@
     - see if the losses are converging or diverging
     - ask a robot learning person if they think this is a valid experiment
 
-- get evaluation working for SmolVLA, ACT, pi0.5, diffusion policy, basic BC policy (vjepa + mlp)
-
-- add a visualization of the various data from the community dataset. Just grab a 20x10 grid of frames from various episodes and visualize. 
-    - add to the paper in the method section under 
+- get evaluation working for SmolVLA, ACT, pi0.5?, diffusion policy, basic BC policy (vjepa + mlp)
 
 
 ### Optional / low priority

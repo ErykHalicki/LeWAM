@@ -39,8 +39,8 @@ MOTOR_NAMES = [
     "gripper",
 ]
 VIDEO_STRIDE = 6  # 30fps native / 5fps model
-N_CONTEXT = 16
-N_ACTION_STEPS = 50
+N_CONTEXT = 8
+N_ACTION_STEPS = 24
 CONTROL_FPS = 30
 
 
@@ -179,6 +179,7 @@ def main():
                 if step % VIDEO_STRIDE == 0:
                     frame_buffer.append({cam: obs[cam] for cam in cam_keys})
                 action = action_queue.popleft()
+                #action[MOTOR_NAMES.index("gripper")] -= 7.0
                 robot.send_action(action_to_dict(action))
                 for i, motor in enumerate(MOTOR_NAMES):
                     rr.log(f"actions/{motor}", rr.Scalars(float(action[i])))

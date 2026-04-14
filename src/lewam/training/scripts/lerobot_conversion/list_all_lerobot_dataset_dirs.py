@@ -8,7 +8,7 @@ def is_lerobot_dataset(path: Path) -> bool:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("root", type=Path, help="Top-level directory (e.g. /cluster/scratch/ehalicki/lerobot_community_dataset)")
+    parser.add_argument("root", type=Path, help="Top-level directory (e.g. /cluster/scratch/ehalicki/ehalicki/LeWAM_community_dataset)")
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
