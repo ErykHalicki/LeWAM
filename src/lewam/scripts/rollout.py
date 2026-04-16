@@ -40,8 +40,9 @@ MOTOR_NAMES = [
 ]
 VIDEO_STRIDE = 6  # 30fps native / 5fps model
 N_CONTEXT = 8
-N_ACTION_STEPS = 24
+N_ACTION_STEPS = 48
 CONTROL_FPS = 30
+GRIPPER_OFFSET = -4.0
 
 
 def _recvall(sock, n):
@@ -80,7 +81,9 @@ def find_camera_by_resolution(target_w, target_h):
 
 
 def obs_to_state(obs):
-    return np.array([obs[f"{m}.pos"] for m in MOTOR_NAMES], dtype=np.float32)
+    state = np.array([obs[f"{m}.pos"] for m in MOTOR_NAMES], dtype=np.float32)
+    state[MOTOR_NAMES.index("gripper")] -= GRIPPER_OFFSET
+    return state
 
 
 def action_to_dict(action):
@@ -179,7 +182,7 @@ def main():
                 if step % VIDEO_STRIDE == 0:
                     frame_buffer.append({cam: obs[cam] for cam in cam_keys})
                 action = action_queue.popleft()
-                #action[MOTOR_NAMES.index("gripper")] -= 7.0
+                action[MOTOR_NAMES.index("gripper")] += GRIPPER_OFFSET
                 robot.send_action(action_to_dict(action))
                 for i, motor in enumerate(MOTOR_NAMES):
                     rr.log(f"actions/{motor}", rr.Scalars(float(action[i])))

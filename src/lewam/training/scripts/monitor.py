@@ -96,11 +96,14 @@ def main():
     with open(losses_local) as f:
         data = json.load(f)
 
+    data = [d for d in data if d.get("total_loss") is not None and d["total_loss"] != 0.0]
+
     if not data:
         print("No loss data yet.")
         sys.exit(0)
 
-    steps = np.array([d["step"] for d in data], dtype=float)
+    step_offset = data[0]["step"]
+    steps = np.array([d["step"] - step_offset for d in data], dtype=float)
     total_losses = np.array([d["total_loss"] for d in data], dtype=float)
     video_losses = np.array([d["video_loss"] for d in data], dtype=float)
     action_losses = np.array([d["action_loss"] for d in data], dtype=float) / action_weight
@@ -108,12 +111,12 @@ def main():
     val_steps, val_total, val_video, val_action = [], [], [], []
     for d in data:
         if "val_total_loss" in d:
-            val_steps.append(d["step"])
+            val_steps.append(d["step"] - step_offset)
             val_total.append(d["val_total_loss"])
             val_video.append(d["val_video_loss"])
             val_action.append(d["val_action_loss"] / action_weight)
 
-    print(f"Steps: {int(steps[0])} - {int(steps[-1])} ({len(steps)} entries)")
+    print(f"Steps: {int(step_offset)} - {int(step_offset + steps[-1])} ({len(steps)} entries, offset by {int(step_offset)})")
     print(f"Latest: total={total_losses[-1]:.4f}  video={video_losses[-1]:.4f}  action={action_losses[-1]:.4f}")
     if val_steps:
         print(
@@ -180,8 +183,7 @@ def main():
 
     ax.legend()
     ax.set_xscale("log")
-    ax.set_xlim(left=10, right=2e5)
-    ax.set_xlabel("step (log)")
+    ax.set_xlabel("step")
     ax.set_ylabel("loss")
     ax.set_title(f"{args.run_tag} -- {len(steps)} steps")
     ax.grid(True, which="major", alpha=0.3)

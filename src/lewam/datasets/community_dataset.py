@@ -1,3 +1,4 @@
+import random
 from pathlib import Path
 
 from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
@@ -81,8 +82,8 @@ class CommunityDataset:
         base = Path(self.cache_root) if self.cache_root else HF_LEROBOT_HOME
         return base / self.repo_id
 
-    def prefetch_metadata(self, **dataset_kwargs) -> dict[int, MultiLeRobotDataset]:
-        """Load metadata, filter to action_dim=6, and build one MultiLeRobotDataset per camera count."""
+    def load_metadata(self):
+        """Load and filter metadata (cheap, no dataset construction). Populates self.metas and self.buckets."""
         metas = {}
         for subpath in self.subpaths:
             meta = LeRobotDatasetMetadata(self.repo_id, self._local_root() / subpath, self.revision)
@@ -97,17 +98,50 @@ class CommunityDataset:
         print(f"Kept {len(metas)}/{len(self.subpaths)} datasets with observation.images.image")
         self.metas = metas
 
-        buckets: dict[int, list[str]] = {}
+        self.buckets: dict[int, list[str]] = {}
         for subpath, meta in metas.items():
             n = len(list(meta.camera_keys))
-            buckets.setdefault(n, []).append(subpath)
+            self.buckets.setdefault(n, []).append(subpath)
+
+    def split_episodes(
+        self,
+        val_fraction: float = 0.1,
+        seed: int = 42,
+    ) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
+        """Deterministic per-sub-dataset episode split. Requires load_metadata() first."""
+        train_eps: dict[str, list[int]] = {}
+        val_eps: dict[str, list[int]] = {}
+        for subpath, meta in self.metas.items():
+            all_ep = list(range(meta.total_episodes))
+            if len(all_ep) < 2:
+                print(f"  {subpath}: only {len(all_ep)} episode(s), all go to train")
+                train_eps[subpath] = all_ep
+                val_eps[subpath] = []
+                continue
+            rng = random.Random(seed)
+            rng.shuffle(all_ep)
+            n_val = max(1, round(len(all_ep) * val_fraction))
+            train_eps[subpath] = sorted(all_ep[:-n_val])
+            val_eps[subpath] = sorted(all_ep[-n_val:])
+        return train_eps, val_eps
+
+    def prefetch_metadata(self, episodes: dict[str, list[int]] | None = None, **dataset_kwargs) -> dict[int, MultiLeRobotDataset]:
+        """Build one MultiLeRobotDataset per camera count. Calls load_metadata() if not already done."""
+        if not hasattr(self, "metas") or not self.metas:
+            self.load_metadata()
 
         root = self._local_root()
-        for n_cams, subpaths in buckets.items():
-            print(f"Building MultiLeRobotDataset for {n_cams} camera(s) with {len(subpaths)} subdatasets")
+        for n_cams, subpaths in self.buckets.items():
             kw = dict(dataset_kwargs)
             if "delta_timestamps" in kw and kw["delta_timestamps"]:
                 kw["delta_timestamps"] = self._expand_camera_timestamps(kw["delta_timestamps"], n_cams)
+            if episodes is not None:
+                ep_dict = {sp: episodes[sp] for sp in subpaths if sp in episodes and episodes[sp]}
+                if not ep_dict:
+                    continue
+                kw["episodes"] = ep_dict
+                subpaths = list(ep_dict.keys())
+            print(f"Building MultiLeRobotDataset for {n_cams} camera(s) with {len(subpaths)} subdatasets")
             self.datasets[n_cams] = MultiLeRobotDataset(
                 repo_ids=subpaths,
                 root=root,
@@ -115,3 +149,34 @@ class CommunityDataset:
             )
 
         return self.datasets
+
+    def build_val_dataset(
+        self,
+        val_episodes: dict[str, list[int]],
+        target_num_cameras: int = 2,
+        **dataset_kwargs,
+    ) -> MultiLeRobotDataset | None:
+        """Build a single MultiLeRobotDataset for validation from one camera-count bucket."""
+        if target_num_cameras not in self.buckets:
+            print(f"No {target_num_cameras}-camera sub-datasets found, skipping val dataset")
+            return None
+
+        subpaths = self.buckets[target_num_cameras]
+        ep_dict = {sp: val_episodes[sp] for sp in subpaths if sp in val_episodes and val_episodes[sp]}
+        if not ep_dict:
+            print(f"No val episodes for {target_num_cameras}-camera sub-datasets")
+            return None
+
+        kw = dict(dataset_kwargs)
+        if "delta_timestamps" in kw and kw["delta_timestamps"]:
+            kw["delta_timestamps"] = self._expand_camera_timestamps(kw["delta_timestamps"], target_num_cameras)
+        kw["episodes"] = ep_dict
+
+        val_subpaths = list(ep_dict.keys())
+        n_eps = sum(len(v) for v in ep_dict.values())
+        print(f"Building val MultiLeRobotDataset: {len(val_subpaths)} subdatasets, {n_eps} episodes ({target_num_cameras} cameras)")
+        return MultiLeRobotDataset(
+            repo_ids=val_subpaths,
+            root=self._local_root(),
+            **kw,
+        )

@@ -9,6 +9,8 @@ Controls (during recording):
   Escape       -> stop recording entirely
 """
 
+import argparse
+
 import cv2
 
 import rerun as rr
@@ -92,6 +94,11 @@ def pick_task(task_history: list[str], current_task: str | None) -> str:
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repeat-task", action="store_true",
+                        help="Keep using the first selected task for all episodes")
+    args = parser.parse_args()
+
     camera_configs = {}
     for cam_key, (default_w, default_h, cap_w, cap_h) in CAMERAS.items():
         idx = find_camera_by_resolution(default_w, default_h)
@@ -151,9 +158,10 @@ def main():
 
     try:
         while episode_idx < NUM_EPISODES and not events["stop_recording"]:
-            current_task = pick_task(task_history, current_task)
-            if current_task not in task_history:
-                task_history.append(current_task)
+            if not (args.repeat_task and current_task):
+                current_task = pick_task(task_history, current_task)
+                if current_task not in task_history:
+                    task_history.append(current_task)
 
             log_say(f"Recording episode {episode_idx + 1}")
             print(f"Task: \"{current_task}\"")

@@ -1,7 +1,11 @@
 model_config: configs/model/base.yaml
 run_tag: null
 
-lerobot_repo_id: null 
+lerobot_repo_id: null
+val_fraction: 0.1
+val_split_seed: 42
+val_batches: 5
+val_num_cameras: 2
 
 steps: 50000
 effective_batch_size: 64

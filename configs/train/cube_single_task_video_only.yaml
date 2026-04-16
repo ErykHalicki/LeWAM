@@ -2,7 +2,8 @@ model_config: configs/model/base.yaml
 run_tag: cube_single_task
 
 lerobot_repo_id: ehalicki/so101_cube
-val_lerobot_repo_id: ehalicki/so101_cube
+val_fraction: 0.1
+val_split_seed: 42
 val_batches: 5
 
 steps: 50000

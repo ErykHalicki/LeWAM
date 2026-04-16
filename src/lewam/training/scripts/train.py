@@ -87,6 +87,16 @@ def _collate_skip_none(batch):
     return torch.utils.data.default_collate(batch)
 
 
+def _split_episodes(episode_indices, val_fraction, seed):
+    indices = list(episode_indices)
+    if len(indices) < 2:
+        return indices, []
+    rng = random.Random(seed)
+    rng.shuffle(indices)
+    n_val = max(1, round(len(indices) * val_fraction))
+    return sorted(indices[:-n_val]), sorted(indices[-n_val:])
+
+
 def _infinite_interleaved(loaders, accelerator):
     iters = {n: iter(l) for n, l in loaders.items()}
     keys = list(loaders.keys())
@@ -467,6 +477,11 @@ def main():
     image_tx = transforms.Resize((crop_size, crop_size), antialias=True)
 
     # ── Dataset (main process downloads, others wait) ─────────────────
+    val_fraction = float(train_cfg.get("val_fraction", 0.1))
+    val_split_seed = int(train_cfg.get("val_split_seed", 42))
+    val_num_cameras = int(train_cfg.get("val_num_cameras", 2))
+    val_ds = None
+
     if use_lerobot:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -477,8 +492,8 @@ def main():
             LeRobotDataset(repo_id=lerobot_repo_id, revision="main", force_cache_sync=True)
         accelerator.wait_for_everyone()
 
-        ds = LeRobotDataset(repo_id=lerobot_repo_id, revision="main")
-        camera_keys = sorted(k for k in ds.meta.features if k.startswith("observation.images."))
+        _meta_ds = LeRobotDataset(repo_id=lerobot_repo_id, revision="main")
+        camera_keys = sorted(k for k in _meta_ds.meta.features if k.startswith("observation.images."))
         num_cameras = len(camera_keys)
         action_horizon = int(num_future / scaled_fps * action_fps)
         action_ts = [i / action_fps for i in range(action_horizon + 1)]
@@ -487,7 +502,7 @@ def main():
         delta_timestamps["observation.state"] = [0.0]
         delta_timestamps["action"] = action_ts
 
-        ds = LeRobotDataset(
+        ds_kwargs = dict(
             repo_id=lerobot_repo_id,
             revision="main",
             delta_timestamps=delta_timestamps,
@@ -495,7 +510,18 @@ def main():
             video_backend="torchcodec",
         )
 
+        if val_fraction > 0:
+            train_eps, val_eps = _split_episodes(range(_meta_ds.num_episodes), val_fraction, val_split_seed)
+            accelerator.print(f"  episode split: {len(train_eps)} train, {len(val_eps)} val (seed={val_split_seed})")
+            ds = LeRobotDataset(episodes=train_eps, **ds_kwargs)
+            val_ds = LeRobotDataset(episodes=val_eps, **ds_kwargs)
+        else:
+            ds = LeRobotDataset(**ds_kwargs)
+        del _meta_ds
+
         accelerator.print(f"  cameras={camera_keys}  episodes={ds.num_episodes}  frames={ds.num_frames}")
+        if val_ds is not None:
+            accelerator.print(f"  val: episodes={val_ds.num_episodes}  frames={val_ds.num_frames}")
     else:
         from lewam.datasets.community_dataset import CommunityDataset
 
@@ -508,47 +534,29 @@ def main():
             "observation.state": [0.0],
             "action": action_ts,
         }
+        cd_kwargs = dict(delta_timestamps=delta_ts, image_transforms=image_tx)
 
         if accelerator.is_main_process:
             _cd = CommunityDataset(repo_id=repo_id, cache_root=cache_root)
-            _cd.prefetch_metadata(delta_timestamps=delta_ts, image_transforms=image_tx)
+            _cd.load_metadata()
+            if val_fraction > 0:
+                train_eps, val_eps = _cd.split_episodes(val_fraction, val_split_seed)
+                _cd.prefetch_metadata(episodes=train_eps, **cd_kwargs)
+                _cd.build_val_dataset(val_eps, target_num_cameras=val_num_cameras, **cd_kwargs)
+            else:
+                _cd.prefetch_metadata(**cd_kwargs)
             del _cd
         accelerator.wait_for_everyone()
 
         cd = CommunityDataset(repo_id=repo_id, cache_root=cache_root)
-        cd.prefetch_metadata(delta_timestamps=delta_ts, image_transforms=image_tx)
-
-    # ── Validation dataset (optional, always LeRobot) ─────────────────
-    val_lerobot_repo_id = train_cfg.get("val_lerobot_repo_id")
-    val_ds = None
-    if val_lerobot_repo_id:
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-        accelerator.print(f"Loading validation LeRobot dataset: {val_lerobot_repo_id}")
-        if accelerator.is_main_process:
-            LeRobotDataset(repo_id=val_lerobot_repo_id, revision="main", force_cache_sync=True)
-        accelerator.wait_for_everyone()
-
-        _vm = LeRobotDataset(repo_id=val_lerobot_repo_id, revision="main")
-        val_camera_keys = sorted(k for k in _vm.meta.features if k.startswith("observation.images."))
-        del _vm
-
-        val_action_horizon = int(num_future / scaled_fps * action_fps)
-        val_action_ts = [i / action_fps for i in range(val_action_horizon + 1)]
-        val_delta_timestamps = {k: past_ts + future_ts for k in val_camera_keys}
-        val_delta_timestamps["observation.state"] = [0.0]
-        val_delta_timestamps["action"] = val_action_ts
-
-        val_ds = LeRobotDataset(
-            repo_id=val_lerobot_repo_id,
-            revision="main",
-            delta_timestamps=val_delta_timestamps,
-            image_transforms=image_tx,
-            video_backend="torchcodec",
-        )
-        accelerator.print(
-            f"  val: cameras={val_camera_keys}  episodes={val_ds.num_episodes}  frames={val_ds.num_frames}"
-        )
+        cd.load_metadata()
+        if val_fraction > 0:
+            train_eps, val_eps = cd.split_episodes(val_fraction, val_split_seed)
+            accelerator.print(f"  episode split (seed={val_split_seed}): {sum(len(v) for v in train_eps.values())} train, {sum(len(v) for v in val_eps.values())} val")
+            cd.prefetch_metadata(episodes=train_eps, **cd_kwargs)
+            val_ds = cd.build_val_dataset(val_eps, target_num_cameras=val_num_cameras, **cd_kwargs)
+        else:
+            cd.prefetch_metadata(**cd_kwargs)
 
     # ── Model ────────────────────────────────────────────────────────────
     latent_frame_side = crop_size // PATCH_SIZE
@@ -802,10 +810,12 @@ def main():
 
     val_loader = None
     if val_ds is not None:
+        _val_num_cams = num_cameras if use_lerobot else val_num_cameras
+        _val_bs = batch_sizes.get(_val_num_cams, min(batch_sizes.values()))
         val_loader = accelerator.prepare(
             DataLoader(
                 _SafeDataset(val_ds),
-                batch_size=batch_sizes[num_cameras],
+                batch_size=_val_bs,
                 num_workers=0,
                 collate_fn=_collate_skip_none,
                 pin_memory=True,
