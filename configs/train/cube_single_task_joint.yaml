@@ -26,4 +26,4 @@ force_batch_size: null
 vram_target_fraction: 0.85
 no_compile: true
 gradient_checkpointing: true
-video_only: false
+video_only: true
