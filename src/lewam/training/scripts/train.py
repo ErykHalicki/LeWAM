@@ -744,8 +744,14 @@ def main():
     )
 
     # ── Scheduler ─────────────────────────────────────────────────────────
+    peak_lr = train_cfg["lr"] * LR_SCALE
+    min_lr_fraction = float(train_cfg.get("min_lr_fraction", 0.1))
     warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.05, end_factor=1.0, total_iters=train_cfg["warmup_steps"])
-    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=train_cfg["steps"] - train_cfg["warmup_steps"])
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=train_cfg["steps"] - train_cfg["warmup_steps"],
+        eta_min=peak_lr * min_lr_fraction,
+    )
     scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, [warmup, cosine], milestones=[train_cfg["warmup_steps"]])
 
     if start_step > 0:

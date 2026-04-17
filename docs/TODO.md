@@ -1,27 +1,14 @@
 ## Implementation
 
-- start a single task training run video_only
-    - 11k steps - done 
-- jointly fine tune the video only checkpoint
-    - 10k steps - ongoing
-- evaluate in real life
-- start a single task training run action_only
-    - 20k steps to match video + joint fine tune compute
-    - ongoing
+- rollout irl with improved policy
+    - task success! very low completion rate, but it does coherent movements
+- test new validation set logic
+
+---
 
 - reach out to mees / alexey / jonas / other phd? for feedback
 
-- specify that we use a relative joint space delta action space in the paper
-
-- check euler wait times
-    - plan out a potential training run depending on rollout results
-    - run fine tuning experiments on euler?
-
-- run the teacher forcing ablation from mimic video 
-    - if we provide ground truth future latents, how good is the models implicit IDM? 
-        - this wont work unless we do different denoising schedules for actions vs video
-    - can it reliably generate the correct actions that caused a specific video sequence?
-
+- specify that we use a joint delta action space in the paper
 
 - make a front page visualization for the paper
     - Video Latents + Language + State -> DiT -> Future Video Latents + Future Actions
@@ -71,6 +58,10 @@
     - the learning problem became significantly harder when the embeddings the model needed to predict were constantly shifting
 
 ## Notes:
+- v0.1 
+    - ~20 gpu hours
+
+- v0.2
 - first training run 
     - 16.8s per step, 18k steps, 64 batch
     - rtx 6000s on vast.ai
@@ -92,7 +83,12 @@
     - fine tuning on multi task dataset, with 60 more episodes than trainnig run 2
     - 2.0 action weight
     - 0.5% success rate, managed to pick up a cube twice over the course of an hour
+- ~100 gpu hous
 
+- v0.3
+    - ~100 gpu hours
+
+or just count cost by vast.ai credit purchases (currently ~250 USD)
 
 - /dev/tty.usbmodem5B141136531 follower
 - /dev/tty.usbmodem5B141125311 leader

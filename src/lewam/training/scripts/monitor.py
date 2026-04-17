@@ -135,6 +135,7 @@ def main():
         nz = arr != 0.0
         ax.plot(steps[nz], arr[nz], alpha=0.25, color=color, linewidth=0.8)
 
+    smoothed_series: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     if len(steps) >= args.smooth:
         kernel = np.ones(args.smooth) / args.smooth
         for arr, color, name in series:
@@ -146,6 +147,7 @@ def main():
             smoothed = np.convolve(s_vals, kernel, mode="valid")
             sm_steps = s_steps[args.smooth // 2 : args.smooth // 2 + len(smoothed)]
             ax.plot(sm_steps, smoothed, color=color, linewidth=2, label=f"{name} (k={args.smooth})")
+            smoothed_series[name] = (sm_steps, smoothed)
 
     if val_steps:
         for vals, color, name in [
@@ -158,28 +160,53 @@ def main():
     def power_law_with_floor(s, a, b, c):
         return a * np.power(s, -b) + c
 
-    for arr, color, name in series:
-        nz_steps = steps[arr != 0.0]
-        if nz_steps.size == 0:
-            continue
-        half_step = nz_steps[len(nz_steps) // 2]
-        fit_mask = (steps >= half_step) & (arr != 0.0)
-        fit_steps = steps[fit_mask]
-        fit_arr = arr[fit_mask]
+    def _fit_and_plot(fit_steps, fit_arr, color, label_prefix, linestyle=":"):
         if fit_steps.size < 5:
-            continue
-        proj_steps = np.logspace(np.log10(fit_steps[0]), np.log10(2e5), 200)
+            return
+        proj_steps = np.logspace(np.log10(max(fit_steps[0], 1.0)), np.log10(2e5), 200)
         try:
             p0 = [fit_arr[0], 0.5, fit_arr[-1] * 0.5]
             bounds = ([0, 0, 0], [np.inf, 5, np.inf])
             popt, _ = curve_fit(power_law_with_floor, fit_steps, fit_arr, p0=p0, bounds=bounds, maxfev=10000)
             a, b, c = popt
             proj_loss = power_law_with_floor(proj_steps, a, b, c)
-            ax.plot(proj_steps, proj_loss, color=color, linewidth=1.5, linestyle=":",
-                    label=f"{name} proj (floor={c:.3f})")
+            ax.plot(proj_steps, proj_loss, color=color, linewidth=1.5, linestyle=linestyle,
+                    label=f"{label_prefix} proj (floor={c:.3f})")
         except RuntimeError:
-            ax.plot([], [], color=color, linewidth=1.5, linestyle=":",
-                    label=f"{name} proj (fit failed)")
+            ax.plot([], [], color=color, linewidth=1.5, linestyle=linestyle,
+                    label=f"{label_prefix} proj (fit failed)")
+
+    for arr, color, name in series:
+        if name in smoothed_series:
+            fs, fv = smoothed_series[name]
+        else:
+            nz = arr != 0.0
+            fs = steps[nz]
+            fv = arr[nz]
+        if fs.size == 0:
+            continue
+        half_step = fs[len(fs) // 2]
+        fit_mask = fs >= half_step
+        _fit_and_plot(fs[fit_mask], fv[fit_mask], color, name)
+
+    if val_steps:
+        for vals, color, name in [
+            (val_video, "green", "val video"),
+            (val_action, "orange", "val action"),
+        ]:
+            v_steps = np.asarray(val_steps, dtype=float)
+            v_vals = np.asarray(vals, dtype=float)
+            nz = v_vals != 0.0
+            v_steps = v_steps[nz]
+            v_vals = v_vals[nz]
+            if v_steps.size == 0:
+                continue
+            half_step = v_steps[len(v_steps) // 2]
+            fit_mask = v_steps >= half_step
+            if fit_mask.sum() < 5:
+                print(f"  {name} fit skipped: only {int(fit_mask.sum())} val point(s) in second half, need >=5")
+                continue
+            _fit_and_plot(v_steps[fit_mask], v_vals[fit_mask], color, name, linestyle=(0, (1, 1)))
 
     ax.legend()
     ax.set_xscale("log")

@@ -15,7 +15,7 @@
 
 ## Dataset
 
-- HuggingFace repo: `ehalicki/LeWAM_community_dataset` (full), `ehalicki/LeWAM_community_dataset_small` (overfitting subset)
+- HuggingFace repo: `ehalicki/LeWAM_community_dataset_preprocessed` (full), `ehalicki/LeWAM_community_dataset_small` (overfitting subset)
 - Local cache root: `$LE_WAM_ROOT/.cache/`
 - norm_stats:       `$LE_WAM_ROOT/.cache/ehalicki/LeWAM_community_dataset[_small]/norm_stats.pt`
 - Checkpoints:      `$LE_WAM_ROOT/runs/<MODEL_TAG>/`
