@@ -537,15 +537,7 @@ def main():
         cd_kwargs = dict(delta_timestamps=delta_ts, image_transforms=image_tx)
 
         if accelerator.is_main_process:
-            _cd = CommunityDataset(repo_id=repo_id, cache_root=cache_root)
-            _cd.load_metadata()
-            if val_fraction > 0:
-                train_eps, val_eps = _cd.split_episodes(val_fraction, val_split_seed)
-                _cd.prefetch_metadata(episodes=train_eps, **cd_kwargs)
-                _cd.build_val_dataset(val_eps, target_num_cameras=val_num_cameras, **cd_kwargs)
-            else:
-                _cd.prefetch_metadata(**cd_kwargs)
-            del _cd
+            CommunityDataset.download(repo_id, cache_root=cache_root)
         accelerator.wait_for_everyone()
 
         cd = CommunityDataset(repo_id=repo_id, cache_root=cache_root)
@@ -908,15 +900,24 @@ def main():
         _micro_count += 1
         do_update = _samples_acc >= samples_per_gpu
         sync_context = model.no_sync if not do_update and hasattr(model, "no_sync") else nullcontext
-        with sync_context():
-            total_loss, losses = train_step(
-                model, raw, accelerator, num_cams,
-                action_weight=action_weight, lang_drop_rate=lang_drop_rate,
-            )
-            accelerator.backward(total_loss)
-
-        for k in _loss_acc:
-            _loss_acc[k] += losses[k].item()
+        try:
+            with sync_context():
+                total_loss, losses = train_step(
+                    model, raw, accelerator, num_cams,
+                    action_weight=action_weight, lang_drop_rate=lang_drop_rate,
+                )
+                accelerator.backward(total_loss)
+            for k in _loss_acc:
+                _loss_acc[k] += losses[k].item()
+        except torch.cuda.OutOfMemoryError as e:
+            accelerator.print(f"  train step OOM (num_cams={num_cams}), skipping micro: {e}")
+            _samples_acc -= batch_sizes[num_cams]
+            _micro_count -= 1
+            for p in model.parameters():
+                p.grad = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            continue
 
         if not do_update:
             if accelerator.is_main_process:
@@ -963,12 +964,20 @@ def main():
 
         if step % save_every == 0 or step == steps or step == 5:
             if val_loader is not None:
-                val_metrics = run_validation(
-                    model, val_loader,
-                    num_batches=int(train_cfg.get("val_batches", 5)),
-                    accelerator=accelerator,
-                    action_weight=action_weight,
-                )
+                try:
+                    val_metrics = run_validation(
+                        model, val_loader,
+                        num_batches=int(train_cfg.get("val_batches", 5)),
+                        accelerator=accelerator,
+                        action_weight=action_weight,
+                    )
+                except torch.cuda.OutOfMemoryError as e:
+                    accelerator.print(f"  validation OOM, skipping: {e}")
+                    val_metrics = None
+                    for p in model.parameters():
+                        p.grad = None
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                 if val_metrics is not None:
                     entry["val_total_loss"] = val_metrics["total_loss"]
                     entry["val_video_loss"] = val_metrics["video_loss"]

@@ -223,7 +223,6 @@ def save_ode_viz(
     model must be the unwrapped LeWAM instance (not accelerator-wrapped).
     """
     import math as _math
-    import numpy as np
     from matplotlib.gridspec import GridSpec as _GS
 
     device = next(model.parameters()).device
@@ -248,6 +247,12 @@ def save_ode_viz(
     all_frames = torch.stack([s[k][:, :total_frames] for k in cam_keys], dim=1)  # (1, N, T, C, H, W)
     ctx_frames = all_frames[:, :, :model.num_context_frames]
     fut_frames = all_frames[:, :, model.num_context_frames:]
+
+    crop_size = model.video_encoder.preprocessor.crop_size
+    frame_latent_h = crop_size // model.VJEPA_PATCH_SIZE
+    frame_latent_w = (crop_size // model.VJEPA_PATCH_SIZE) * num_cams
+    if frame_latent_h != model.frame_latent_h or frame_latent_w != model.frame_latent_w:
+        model.set_patch_grid(frame_latent_h, frame_latent_w, num_cams)
 
     context_tokens = model.encode_video(ctx_frames)
     future_tokens = None if model.action_only else model.encode_video(fut_frames)
