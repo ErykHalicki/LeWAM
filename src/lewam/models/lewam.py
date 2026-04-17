@@ -219,6 +219,7 @@ class LeWAM(nn.Module):
         self._register_action_pos(num_ctx_t, tubelet_fps, action_horizon, action_fps)
 
         # ── Attention mask ───────────────────────────────────────────────
+        self._mask_cache: dict = {}
         self.build_flex_mask()
 
         self._init_weights()
@@ -521,14 +522,22 @@ class LeWAM(nn.Module):
     def build_flex_mask(self):
         spatial = self.frame_latent_h * self.frame_latent_w
         device = next(self.parameters()).device
-        self._flex_mask = self._build_flex_mask(
-            self.N_ctx, self.N_fut, self.N_act, spatial,
-            block_size=self.attn_block_size, device=device,
-        )
-        self._dense_mask = self._build_flex_mask(
-            self.N_ctx, self.N_fut, self.N_act, spatial,
-            block_size=self.attn_block_size, device="cpu", flex_block_size=1,
-        ).to_dense().squeeze().bool().to(device)
+        key = (self.N_ctx, self.N_fut, self.N_act, spatial, str(device))
+        cached = self._mask_cache.get(key)
+        if cached is None:
+            flex = self._build_flex_mask(
+                self.N_ctx, self.N_fut, self.N_act, spatial,
+                block_size=self.attn_block_size, device=device,
+            )
+            dense = self._build_flex_mask(
+                self.N_ctx, self.N_fut, self.N_act, spatial,
+                block_size=self.attn_block_size, device="cpu", flex_block_size=1,
+            ).to_dense().squeeze().bool().to(device)
+            self._mask_cache[key] = (flex, dense)
+        else:
+            flex, dense = cached
+        self._flex_mask = flex
+        self._dense_mask = dense
 
     @staticmethod
     def visualize_attn_mask(N_ctx, N_fut, N_act, block_size=2):

@@ -876,7 +876,8 @@ def main():
     step = start_step
     t0 = time.time()
     _t0_step = start_step
-    _loss_acc = {k: 0.0 for k in ("total_loss", "video_loss", "action_loss")}
+    _loss_keys = ("total_loss", "video_loss", "action_loss")
+    _loss_acc = {k: torch.zeros((), device=accelerator.device) for k in _loss_keys}
     _micro_count = 0
     _samples_acc = 0
     _data_secs_acc = 0.0
@@ -908,7 +909,7 @@ def main():
                 )
                 accelerator.backward(total_loss)
             for k in _loss_acc:
-                _loss_acc[k] += losses[k].item()
+                _loss_acc[k] += losses[k].detach()
         except torch.cuda.OutOfMemoryError as e:
             accelerator.print(f"  train step OOM (num_cams={num_cams}), skipping micro: {e}")
             _samples_acc -= batch_sizes[num_cams]
@@ -934,10 +935,11 @@ def main():
         optimizer.zero_grad()
         step += 1
 
-        entry = {k: _loss_acc[k] / _micro_count for k in _loss_acc} | {"step": step}
+        entry = {k: (_loss_acc[k] / _micro_count).item() for k in _loss_acc} | {"step": step}
         loss_log.append(entry)
         _data_secs_step = _data_secs_acc
-        _loss_acc = {k: 0.0 for k in _loss_acc}
+        for k in _loss_acc:
+            _loss_acc[k].zero_()
         _micro_count = 0
         _samples_acc = 0
         _data_secs_acc = 0.0
