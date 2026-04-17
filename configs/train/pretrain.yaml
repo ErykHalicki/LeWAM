@@ -13,8 +13,8 @@ base_batch_size: 128
 lr: 7.0e-5
 warmup_steps: 200
 crop_size: 256
-num_workers: 4
-save_every: 50
+num_workers: 8
+save_every: 100
 small_dataset: false # runs on lewam_community_dataset_small
 resume: vid_only_pretraining/vid_only_pretraining_latest.pt
 s3_path: s3://lewam/checkpoints
@@ -25,7 +25,7 @@ timezone: Europe/Zurich
 action_weight: 1.0 # not sure what this should be tbh
 lang_drop_rate: 0.15
 force_batch_size: null
-vram_target_fraction: 0.85
+vram_target_fraction: 0.825
 no_compile: true
 video_only: true
 gradient_checkpointing: true
