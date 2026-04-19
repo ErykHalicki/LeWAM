@@ -27,6 +27,6 @@ lang_drop_rate: 0.15
 force_batch_size: null
 vram_target_fraction: 0.825
 no_compile: true
-video_only: true
+video_only: false
 gradient_checkpointing: true
 backup_every: 1000
